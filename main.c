@@ -71,6 +71,7 @@
 #include <uapi/linux/netfilter_arp.h>
 
 
+// 从 maptable.c 导入的哈希表操作函数
 extern int 	init_hash_table(HashTable *, char *);
 extern void 	clean_table(HashTable *);
 extern void 	insert_table(HashTable *, void *, u8);
@@ -82,34 +83,44 @@ extern void	clean_suspended_entries(HashTable * ht);
 extern void 	notify_all_bfs(HashTable * ht);
 extern void	check_timeout(HashTable * ht);
 
-static domid_t my_domid;
-static u8 my_macs[MAX_MAC_NUM][ETH_ALEN];
-static u8 num_of_macs = 0;
-static u8 freezed = 0;
-struct net_device *NIC = NULL;
-static int if_drops = 0;
-static skb_queue_t out_queue;
-static skb_queue_t pending_free;
+// 全局变量声明
+static domid_t my_domid; // 本地域（Domain）的ID
+static u8 my_macs[MAX_MAC_NUM][ETH_ALEN]; // 存储本地所有网络接口的MAC地址
+static u8 num_of_macs = 0; // 本地MAC地址的数量
+static u8 freezed = 0; // 标志位，用于在迁移期间冻结模块活动
+struct net_device *NIC = NULL; // 用于发送会话管理消息的网络接口设备
+static int if_drops = 0; // 记录网络接口丢弃的数据包数量
+static skb_queue_t out_queue; // 用于暂存待通过XenLoop发送的数据包队列
+static skb_queue_t pending_free; // 待释放的skb队列 (当前代码中未使用)
 
+// 静态函数声明
 static int xenloop_connect(message_t *msg, Entry *e);
 static int xenloop_listen(Entry *e);
-static struct task_struct *suspend_thread = NULL;
-DECLARE_WAIT_QUEUE_HEAD(swq);
-static struct task_struct *pending_thread = NULL;
-DECLARE_WAIT_QUEUE_HEAD(pending_wq);
+static struct task_struct *suspend_thread = NULL; // 用于处理挂起连接的内核线程
+DECLARE_WAIT_QUEUE_HEAD(swq); // suspend_thread的等待队列
+static struct task_struct *pending_thread = NULL; // 用于处理待发送数据包的内核线程
+DECLARE_WAIT_QUEUE_HEAD(pending_wq); // pending_thread的等待队列
 
-// additional map table functions for IP hash map
+// 针对IP哈希表的额外映射表函数
 extern void insert_table_ip(HashTable* ht, u32 ip, Entry* old_entry);
 extern void * lookup_table_ip(HashTable * ht, u32 ip);
 extern void remove_entry_mac(HashTable* ht, void* mac);
 extern int init_hash_table_ip(HashTable* ht);
 
-HashTable mac_domid_map;
-HashTable ip_domid_map;
+// 哈希表实例，用于存储MAC/IP地址到Domain ID的映射
+HashTable mac_domid_map; // MAC地址 -> Domain ID 映射表
+HashTable ip_domid_map;  // IP地址 -> Domain ID 映射表
 
+// 模块参数，用于指定XenLoop使用的物理网卡名称
 static char* nic = NULL;
 module_param(nic,charp,0660);
 
+/**
+ * @brief 将XenLoop的状态写入XenStore。
+ *
+ * @param status 要写入的状态值 (1: 运行中, 0: 已停止/挂起)。
+ * @return 成功返回0，失败返回错误码。
+ */
 static int  write_xenstore(int status)
 {
 	int err = 1;
@@ -121,6 +132,11 @@ static int  write_xenstore(int status)
 	return err;
 }
 
+/**
+ * @brief 从XenStore读取并返回当前Domain的ID。
+ *
+ * @return 返回当前Domain的ID，失败则返回错误码。
+ */
 static domid_t get_my_domid(void)
 {
 	char *domidstr;
@@ -140,6 +156,12 @@ static domid_t get_my_domid(void)
 }
 
 
+/**
+ * @brief 将字符串格式的MAC地址解析并存储到my_macs数组中。
+ *
+ * @param mac 指向MAC地址字符串的指针。
+ * @return 总是返回0。
+ */
 int store_mac(char* mac)
 {
 	char *pEnd = mac;
@@ -159,6 +181,11 @@ int store_mac(char* mac)
 
 
 
+/**
+ * @brief 探测并存储本地所有的虚拟网络接口（VIF）的MAC地址。
+ *
+ * @return 成功返回0，失败返回错误码。
+ */
 static int probe_vifs(void)
 {
         int err = 0;
@@ -201,6 +228,15 @@ out:
 	return err;
 }
 
+/**
+ * @brief 根据收到的会话发现消息更新MAC-DomID映射表。
+ *
+ * 当收到一个XENLOOP_MSG_TYPE_SESSION_DISCOVER类型的消息时，
+ * 此函数会检查消息中包含的MAC地址列表。如果某个MAC地址不在本地
+ * 的映射表中，则将其和对应的Domain ID添加到表中。
+ *
+ * @param msg 指向收到的消息结构体的指针。
+ */
 void session_update(message_t* msg)
 {
 	int i, found = 0;
@@ -208,17 +244,21 @@ void session_update(message_t* msg)
 	Entry * e;
 
 	for(i=0; i<mac_count; i++) {
+		// 检查消息中的MAC地址是否是本地MAC地址之一
 		if (memcmp(msg->mac[i], my_macs[0], ETH_ALEN) == 0) {
 			found = 1;
 			break;
 		}
 	}
+	// 如果消息与本域无关，则直接返回
 	if (!found) return;
 
 	for(i=0; i<mac_count; i++) {
+		// 跳过自己的MAC地址
 		if (memcmp(msg->mac[i], my_macs[0], ETH_ALEN) == 0)
 			continue;
 
+		// 如果某个MAC地址不在映射表中，则添加新条目
 		if (!(e = lookup_table(&mac_domid_map, msg->mac[i]))) {
 
 			insert_table(&mac_domid_map, msg->mac[i], msg->guest_domids[i]);
@@ -226,13 +266,20 @@ void session_update(message_t* msg)
 			DPRINTK("Added one new guest mac = " MAC_FMT  " Domid=%d.\n", \
 			   MAC_NTOA(msg->mac[i]), msg->guest_domids[i]);
 
-		} else
+		} else // 如果已存在，则更新时间戳
 			e->timestamp = jiffies;
 	}
 
+	// 更新哈希表，移除过时的条目
 	update_table(&mac_domid_map, (u8*)msg->mac, msg->mac_count);
 }
 
+/**
+ * @brief 在处理连接创建消息前进行预检查。
+ *
+ * @param msg 指向会话消息的指针。
+ * @return 如果找到对应的条目，则返回该条目指针；否则返回NULL。
+ */
 Entry *pre_check_msg(message_t *msg)
 {
 	Entry *e = NULL;
@@ -247,6 +294,15 @@ Entry *pre_check_msg(message_t *msg)
 	return e;
 }
 
+/**
+ * @brief 接收并处理来自Dom0的会话管理消息。
+ *
+ * @param skb 包含消息的网络数据包。
+ * @param dev 接收设备。
+ * @param pt 数据包类型。
+ * @param d 原始设备。
+ * @return 总是返回 NET_RX_SUCCESS。
+ */
 int session_recv(struct sk_buff * skb, net_device * dev, packet_type * pt, net_device * d)
 {
 	int ret = NET_RX_SUCCESS;
@@ -264,19 +320,23 @@ int session_recv(struct sk_buff * skb, net_device * dev, packet_type * pt, net_d
 
 	switch(msg->type) {
 		case XENLOOP_MSG_TYPE_SESSION_DISCOVER:
+			// 如果模块未被冻结，则更新会话信息
 			if (!freezed)
 				session_update(msg);
 			break;
 		case XENLOOP_MSG_TYPE_CREATE_CHN:
+			// 处理创建通道的请求
 			e = pre_check_msg(msg);
 			if(!e)	goto out;
 
 			ret = xenloop_connect(msg, e);
 			break;
 		case XENLOOP_MSG_TYPE_CREATE_ACK:
+			// 处理创建通道的确认消息
 			e = pre_check_msg(msg);
 			if(!e)	goto out;
 
+			// 更新状态为已连接，并删除ACK超时定时器
 			e->status = XENLOOP_STATUS_CONNECTED;
 			if(e->del_timer) {
 				del_timer(&e->ack_timer);
@@ -294,15 +354,21 @@ out:
 }
 
 
+// 定义一个packet_type结构，用于接收特定以太网类型（ETH_P_TIDC）的数据包
 static packet_type xenloop_ptype = {
-	.type		= __constant_htons(ETH_P_TIDC),
-	.func 		= session_recv,
-	.dev 		= NULL,
+	.type		= __constant_htons(ETH_P_TIDC), // 协议类型
+	.func 		= session_recv, // 处理函数
+	.dev 		= NULL, // 监听所有设备
 	.af_packet_priv = NULL,
 };
 
 
-
+/**
+ * @brief 通过指定的网络接口发送一个skb。
+ *
+ * @param skb 要发送的数据包。
+ * @param dest 目标MAC地址。
+ */
 inline void net_send(struct sk_buff * skb, u8 * dest)
 {
 	ethhdr * eth;
@@ -310,6 +376,7 @@ inline void net_send(struct sk_buff * skb, u8 * dest)
 
 	skb->network_header = 0;
 
+	// 设置以太网头部
 	skb->len = headers;
 	skb->data_len = 0;
 	skb_shinfo(skb)->nr_frags 	= 0;
@@ -332,6 +399,7 @@ inline void net_send(struct sk_buff * skb, u8 * dest)
 	SKB_LINEAR_ASSERT(skb);
 
 
+	// 发送数据包
 	if((ret = dev_queue_xmit(skb))) {
 		DB("Non-zero return code: %d %s", ret,
 		   skb_shinfo(skb) ? "good" : "bad");
@@ -344,6 +412,14 @@ inline void net_send(struct sk_buff * skb, u8 * dest)
 }
 
 
+/**
+ * @brief 发送一个创建通道的消息。
+ *
+ * @param gref_in 输入FIFO的grant reference。
+ * @param gref_out 输出FIFO的grant reference。
+ * @param remote_port 远端的事件通道端口。
+ * @param dest_mac 目标MAC地址。
+ */
 void send_create_chn_msg(int gref_in, int gref_out, int remote_port, u8 *dest_mac)
 {
 	message_t *m;
@@ -356,6 +432,7 @@ void send_create_chn_msg(int gref_in, int gref_out, int remote_port, u8 *dest_ma
 
 	m = (message_t *) (skb->data + LINK_HDR);
 
+	// 填充消息内容
 	memset(m, 0, MSGSIZE);
 	m->type = XENLOOP_MSG_TYPE_CREATE_CHN;
 	m->domid= my_domid;
@@ -370,6 +447,11 @@ void send_create_chn_msg(int gref_in, int gref_out, int remote_port, u8 *dest_ma
 	TRACE_EXIT;
 }
 
+/**
+ * @brief 发送一个创建通道的确认消息。
+ *
+ * @param dest_mac 目标MAC地址。
+ */
 void send_create_ack_msg(u8 *dest_mac)
 {
 	message_t *m;
@@ -381,6 +463,7 @@ void send_create_ack_msg(u8 *dest_mac)
 
 	m = (message_t *) (skb->data + LINK_HDR);
 
+	// 填充消息内容
 	memset(m, 0, MSGSIZE);
 	m->type = XENLOOP_MSG_TYPE_CREATE_ACK;
 	m->domid= my_domid;
@@ -392,9 +475,15 @@ void send_create_ack_msg(u8 *dest_mac)
 	TRACE_EXIT;
 }
 
+/**
+ * @brief 创建通道确认消息的超时处理函数。
+ *
+ * @param tm 指向定时器列表的指针。
+ */
 static void ack_timeout(struct timer_list* tm)
 {
 	// the first member of the struct is the address of the struct Entry
+	// 从定时器结构获取Entry结构
 	Entry* e = container_of(tm, struct Entry, ack_timer);
 	bf_handle_t *bfl;
 
@@ -404,6 +493,7 @@ static void ack_timeout(struct timer_list* tm)
 	BUG_ON(!e->listen_flag);
 
 
+	// 如果已经连接，则直接返回
 	if( e->status == XENLOOP_STATUS_CONNECTED )
 		return;
 
@@ -412,6 +502,7 @@ static void ack_timeout(struct timer_list* tm)
  	bfl = e->bfh;
 	BUG_ON(!bfl);
 
+	// 如果重试次数未超过上限，则重发创建通道消息并重置定时器
 	if(e->retry_count < MAX_RETRY_COUNT ) {
 
 		send_create_chn_msg(BF_GREF_IN(bfl),		\
@@ -420,7 +511,7 @@ static void ack_timeout(struct timer_list* tm)
 					e->mac);
 		e->retry_count++;
 		mod_timer(&e->ack_timer, jiffies + XENLOOP_ACK_TIMEOUT*HZ);
-	} else {
+	} else { // 如果超过重试次数，则将通道标记为挂起状态，并唤醒挂起处理线程
 		if (check_descriptor(e->bfh)) {
 			BF_SUSPEND_IN(e->bfh) = 1;
 			BF_SUSPEND_OUT(e->bfh) = 1;
@@ -434,6 +525,12 @@ static void ack_timeout(struct timer_list* tm)
 
 
 
+/**
+ * @brief 监听并等待远端VM的连接请求（作为连接的发起方）。
+ *
+ * @param e 指向对应连接的Entry。
+ * @return 成功返回0，失败返回-1。
+ */
 static int xenloop_listen(Entry *e)
 {
 	static DEFINE_SPINLOCK(listen_lock);
@@ -445,20 +542,24 @@ static int xenloop_listen(Entry *e)
 
 	TRACE_ENTRY;
 
+	// 使用自旋锁确保线程安全
 	spin_lock_irqsave(&listen_lock, flag);
 
+	// 如果状态不是初始状态，说明已经有其他线程在处理，直接返回
 	if( e->status != XENLOOP_STATUS_INIT) {
 		spin_unlock_irqrestore(&listen_lock, flag);
 		TRACE_EXIT;
 		return 0;
 	}
 
+	// 设置状态为监听中
 	e->status = XENLOOP_STATUS_LISTEN;
 
 	spin_unlock_irqrestore(&listen_lock, flag);
 
 
 
+	// 创建双向FIFO
 	bfl = bf_create(remote_domid, XENLOOP_ENTRY_ORDER);
 	if(!bfl) {
 		e->status = XENLOOP_STATUS_INIT;
@@ -468,6 +569,7 @@ static int xenloop_listen(Entry *e)
 		return -1;
 	}
 
+	// 初始化FIFO中的数据项状态
 	for(i=0; i<=xf_size(bfl->in); i++) {
 		pbf = xf_entry(bfl->in, bf_data_t, i);
 		pbf->status = BF_FREE;
@@ -477,16 +579,18 @@ static int xenloop_listen(Entry *e)
 		pbf->status = BF_FREE;
 	}
 
-	e->listen_flag = 1;
+	e->listen_flag = 1; // 标记为监听方
 	e->bfh = bfl;
 
 
+	// 发送创建通道的消息给对端
 	send_create_chn_msg(BF_GREF_IN(bfl),
 				BF_GREF_OUT(bfl),
 				BF_EVT_PORT(bfl),
 				e->mac);
 
 
+	// 启动ACK超时定时器
 	timer_setup(&e->ack_timer, ack_timeout, 0);
 	e->del_timer = 1;
 	e->ack_timer.expires	= jiffies + XENLOOP_ACK_TIMEOUT*HZ;
@@ -496,6 +600,13 @@ static int xenloop_listen(Entry *e)
 	return 0;
 }
 
+/**
+ * @brief 连接到远端VM（作为连接的接收方）。
+ *
+ * @param msg 包含连接信息的会话消息。
+ * @param e 指向对应连接的Entry。
+ * @return 成功返回0，失败返回-1。
+ */
 static int xenloop_connect(message_t *msg, Entry *e)
 {
 	domid_t remote_domid = e->domid;
@@ -505,6 +616,7 @@ static int xenloop_connect(message_t *msg, Entry *e)
 
 	BUG_ON(!msg);
 
+	// 如果已经连接，则只需回复ACK
 	if(e->status == XENLOOP_STATUS_CONNECTED) {
 		send_create_ack_msg(e->mac);
 		TRACE_EXIT;
@@ -512,12 +624,14 @@ static int xenloop_connect(message_t *msg, Entry *e)
 	}
 
 
+	// 检查传入的grant reference和端口号是否有效
 	if(msg->gref_in <= 0 || msg->gref_out <= 0 || msg->remote_port <= 0) {
 		EPRINTK("gref_in %d gref_out %d remote_port %d\n", msg->gref_in, msg->gref_out, msg->remote_port);
 		goto err;
 	}
 
 
+	// 连接到远端提供的FIFO
 	bfc = bf_connect(remote_domid, msg->gref_out, msg->gref_in,\
 				 msg->remote_port);
 	if(!bfc) {
@@ -525,13 +639,14 @@ static int xenloop_connect(message_t *msg, Entry *e)
 		goto err;
 	}
 
-	e->listen_flag = 0;
+	e->listen_flag = 0; // 标记为连接方
 	e->bfh = bfc;
 
 	e->status = XENLOOP_STATUS_CONNECTED;
 	DPRINTK("CONNECTOR status changed to XENLOOP_STATUS_CONNECTED!!!\n");
 
 
+	// 发送ACK确认连接成功
 	send_create_ack_msg(e->mac);
 
 	TRACE_EXIT;
@@ -543,6 +658,13 @@ err:
 
 
 
+/**
+ * @brief 通过XenLoop的FIFO发送一个大数据包（可能跨越多个FIFO条目）。
+ *
+ * @param skb 要发送的数据包。
+ * @param xfh 要使用的单向FIFO句柄。
+ * @return 成功返回0，失败返回-1。
+ */
 static int xmit_large_pkt(struct sk_buff *skb, xf_handle_t *xfh)
 {
 	bf_data_t *mdata;
@@ -553,22 +675,26 @@ static int xmit_large_pkt(struct sk_buff *skb, xf_handle_t *xfh)
 	BUG_ON(!skb);
 	BUG_ON(!xfh);
 
+	// 检查FIFO是否有足够空间
 	if( skb->len + sizeof(bf_data_t) > xf_free(xfh)*sizeof(bf_data_t) ) {
 		TRACE_EXIT;
 		return -1;
 	}
 
+	// 在FIFO中预留一个条目用于存储元数据
 	mdata  = xf_entry(xfh, bf_data_t, xf_size(xfh));
 	BUG_ON(!mdata);
 
-	mdata->status = BF_WAITING;
-	mdata->type = BF_PACKET;
-	mdata->pkt_info = skb->len;
+	mdata->status = BF_WAITING; // 标记为等待处理
+	mdata->type = BF_PACKET;    // 类型为数据包
+	mdata->pkt_info = skb->len; // 存储数据包长度
 
+	// 计算数据包需要占用的FIFO条目数
 	num_entries = skb->len/sizeof(bf_data_t);
 	if (skb->len % sizeof(bf_data_t))
 		num_entries++;
 
+	// 获取FIFO的内存地址信息，用于处理环形缓冲区的回绕
 	pfifo = (char *)xfh->fifo;
 	pfront = (char *)xf_entry(xfh, bf_data_t, 0);
 	pback = (char *) xf_entry(xfh, bf_data_t, xf_size(xfh) + 1);
@@ -577,7 +703,8 @@ static int xmit_large_pkt(struct sk_buff *skb, xf_handle_t *xfh)
 	BUG_ON(!pfront);
 	BUG_ON(!pback);
 
-	if( pback >= pfront ) {
+	// 拷贝数据包内容到FIFO
+	if( pback >= pfront ) { // 不需要回绕
 		len1 = (pfifo + xfh->descriptor->max_data_entries*sizeof(bf_data_t)) - pback;
 		len = (len1 >= skb->len) ? skb->len : len1;
 		if(skb_copy_bits(skb, 0, pback, len))
@@ -588,11 +715,12 @@ static int xmit_large_pkt(struct sk_buff *skb, xf_handle_t *xfh)
 			if(skb_copy_bits(skb, len, pfifo, len2))
 				BUG();
 		}
-	} else {
+	} else { // 直接拷贝
 		if(skb_copy_bits(skb, 0, pback, skb->len))
 			BUG();
 	}
 
+	// 更新FIFO的生产者指针
 	ret = xf_pushn(xfh, num_entries + 1);
 	BUG_ON( ret < 0 );
 
@@ -601,6 +729,12 @@ static int xmit_large_pkt(struct sk_buff *skb, xf_handle_t *xfh)
 	return 0;
 }
 
+/**
+ * @brief 将一个skb入队。
+ *
+ * @param Q 目标队列。
+ * @param skb 要入队的数据包。
+ */
 void enqueue(skb_queue_t *Q, struct sk_buff *skb)
 {
 	if (Q->count++ == 0) {
@@ -612,6 +746,11 @@ void enqueue(skb_queue_t *Q, struct sk_buff *skb)
 	}
 }
 
+/**
+ * @brief 从队列头部移除一个skb。
+ *
+ * @param Q 目标队列。
+ */
 void dequeue(skb_queue_t *Q)
 {
 	if (Q->head != Q->tail)
@@ -622,6 +761,11 @@ void dequeue(skb_queue_t *Q)
 	}
 }
 
+/**
+ * @brief 清空一个skb队列并释放所有数据包。
+ *
+ * @param Q 要清空的队列。
+ */
 void clean_pending(skb_queue_t *Q) {
 	struct sk_buff *skb;
 	while (Q->count > 0) {
@@ -634,6 +778,15 @@ void clean_pending(skb_queue_t *Q) {
 // TODO just pass Entry e to this function?
 // sometimes this get's passed NULL to just empty the queue out
 // queue will fill up if xmit_large_pkt returns some error
+// TODO: 仅向此函数传递Entry e？
+// 有时会传递NULL以清空队列
+// 如果xmit_large_pkt返回错误，队列将会填满
+/**
+ * @brief 从out_queue中取出数据包并通过XenLoop发送。
+ *
+ * @param skb 要发送的新数据包（可以为NULL，表示只处理队列中已有的包）。
+ * @return 成功返回0，失败返回-1。
+ */
 inline int xmit_packets(struct sk_buff *skb)
 {
 	static DEFINE_SPINLOCK(xmit_lock);
@@ -644,9 +797,11 @@ inline int xmit_packets(struct sk_buff *skb)
 
 	BUG_ON( in_irq() );
 
+	// 使用自旋锁保护队列访问
 	spin_lock_irqsave( &xmit_lock, flags );
 
 	if(skb) {
+		// 检查数据包大小是否超过FIFO容量
 		if ( skb->len + sizeof(bf_data_t) < (1 << XENLOOP_ENTRY_ORDER)*sizeof(bf_data_t) )
 			enqueue(&out_queue, skb);
 		else {
@@ -655,6 +810,7 @@ inline int xmit_packets(struct sk_buff *skb)
 		}
 	}
 
+	// 循环处理队列中的所有数据包
 	while (out_queue.count > 0) {
 		int rc;
 		Entry *e;
@@ -664,9 +820,13 @@ inline int xmit_packets(struct sk_buff *skb)
 
 		// TODO store skb and entry together? so we don't have to do this lookup
 		// this lookup is fairly negligle though
+		// TODO: 将skb和entry一起存储？这样就不必进行查找
+		// 不过这个查找的开销可以忽略不计
+		// 根据目的IP地址查找对应的连接条目
 		e = lookup_table_ip(&ip_domid_map, ip_hdr(skb)->daddr);
 		BUG_ON(!e);
 
+		// 发送数据包
 		rc = xmit_large_pkt(skb, e->bfh->out);
 
 		if (rc < 0) {
@@ -680,10 +840,21 @@ inline int xmit_packets(struct sk_buff *skb)
 			// to me, this seems dangerous since it uses a hypercall to send a signal on the event channel, but we've disabled interrupts
 			// I'm not sure this is 100% dangerous, but it seems like it could lock up the CPU since we'll never get a response to the hypercall with interrupts masked
 			// bf_notify(e->bfh->port);
+			// TODO: 这看起来很危险，我认为在这里调用bf_notify可能会锁定CPU（因为我们在irqsave中）
+			// 我们禁用了中断，然后在bf_notify中调用了一个hypercall，我们可能永远不会得到返回并卡住 :(
+			// 首先，为什么我们在这里需要一个通知？xmit_pending线程会再次调用这个函数
+			// 我们没有传输任何数据，为什么要告诉另一个客户机我们传输了？看起来很傻，但也许我错了
+
+			// 注意：原始的XenLoop在这里调用bf_notify
+			// 对我来说，这似乎很危险，因为它使用hypercall在事件通道上发送信号，但我们已经禁用了中断
+			// 我不确定这是否100%危险，但看起来它可能会锁住CPU，因为我们永远不会收到对hypercall的响应，当中断被屏蔽时
+			// bf_notify(e->bfh->port);
+			// 唤醒pending_thread，以便稍后重试
 			wake_up_interruptible(&pending_wq);
 			break;
 		}
 
+		// 发送成功，出队并释放skb
 		dequeue(&out_queue);
 
 		kfree_skb(skb);
@@ -694,6 +865,10 @@ inline int xmit_packets(struct sk_buff *skb)
 	// TODO why don't we onlt call notify on the bififos we updated? we'd have to track that
 	// we can't call notify while IRQs are masked for the same reason as above, it could lock the CPU
 	// calling bf_notify in the above loop seemed to confirm this theory as the CPU locked up
+	// TODO: 为什么我们不只对更新过的bififo调用notify？我们需要跟踪这一点
+	// 我们不能在IRQ被屏蔽时调用notify，原因同上，它可能会锁住CPU
+	// 在上面的循环中调用bf_notify似乎证实了这个理论，因为CPU锁死了
+	// 通知所有可能接收了数据的对端VM
 	notify_all_bfs(&ip_domid_map);
 
 	TRACE_EXIT;
@@ -702,6 +877,14 @@ inline int xmit_packets(struct sk_buff *skb)
 
 
 // hook outgoing packets
+/**
+ * @brief Netfilter钩子函数，用于截获向外发送的IP包。
+ *
+ * @param priv 私有数据。
+ * @param skb 数据包。
+ * @param state 钩子状态。
+ * @return NF_ACCEPT (正常处理), NF_STOLEN (数据包已被处理)。
+ */
 static unsigned int iphook_out(
 	void* priv,
 	struct sk_buff *skb,
@@ -710,13 +893,15 @@ static unsigned int iphook_out(
 	int ret = NF_ACCEPT;
 
 	// DPRINTK("Hooked out IP: %\n", htonl(ip_hdr(skb)->daddr));
+	// 检查目的IP是否在我们的映射表中
 	if(!(e = lookup_table_ip(&ip_domid_map, ip_hdr(skb)->daddr))) {
 		// DPRINTK("Not in table, using normal routing\n");
-		return NF_ACCEPT;
+		return NF_ACCEPT; // 不在，则正常通过网络栈
 	}
 
 	TRACE_ENTRY;
 
+	// 检查连接是否被挂起
 	if (check_descriptor(e->bfh) && (BF_SUSPEND_IN(e->bfh) || BF_SUSPEND_OUT(e->bfh))) {
 		e->status = XENLOOP_STATUS_SUSPEND;
 		wake_up_interruptible(&swq);
@@ -725,21 +910,23 @@ static unsigned int iphook_out(
 
 	switch (e->status) {
 		case  XENLOOP_STATUS_INIT:
+			// 如果是初始状态，且本地域ID较小，则发起连接
 			if( my_domid < e->domid)  {
 				xenloop_listen(e);
 			}
 
 			TRACE_EXIT;
-			return NF_ACCEPT;
+			return NF_ACCEPT; // 初始连接时，让第一个包正常发出
 
 		case XENLOOP_STATUS_CONNECTED:
+			// 如果已连接，则通过XenLoop发送
 			if( xmit_packets(skb) < 0  ) {
 				EPRINTK("Couldn't send packet via bififo. Using network instead\n");
-				ret = NF_ACCEPT;
+				ret = NF_ACCEPT; // 发送失败，则退回正常网络路径
 				goto out;
 			}
 			// DPRINTK("packet transmitted through Xenloop\n");
-			ret = NF_STOLEN;
+			ret = NF_STOLEN; // 发送成功，数据包被"窃取"，不再经过网络栈
 			break;
 
 		case XENLOOP_STATUS_LISTEN:
@@ -754,6 +941,14 @@ out:
 
 
 
+/**
+ * @brief Netfilter钩子函数，用于截获进入的IP包。
+ *
+ * @param priv 私有数据。
+ * @param skb 数据包。
+ * @param state 钩子状态。
+ * @return 总是返回 NF_ACCEPT。
+ */
 static unsigned int iphook_in(
 	void* priv,
 	struct sk_buff* skb,
@@ -763,10 +958,13 @@ static unsigned int iphook_in(
 	Entry * e;
 	int ret = NF_ACCEPT;
 
+	// 检查目的IP是否在映射表中
 	if(!(e = lookup_table_ip(&ip_domid_map, ip_hdr(skb)->daddr))) {
 		return ret;
 	}
 
+	// 如果是初始状态且本地域ID较小，发起连接
+	// 这是为了处理对端先发起通信的情况
 	if ((e->status == XENLOOP_STATUS_INIT) && (my_domid < e->domid))
 		xenloop_listen(e);
 
@@ -777,6 +975,14 @@ static unsigned int iphook_in(
 
 // hook incoming ARP packets
 // if it's resolving a MAC address the dom0 has told us about, add it's IP to the table we check
+/**
+ * @brief Netfilter钩子函数，用于截获进入的ARP包。
+ *
+ * @param priv 私有数据。
+ * @param skb 数据包。
+ * @param state 钩子状态。
+ * @return 总是返回 NF_ACCEPT。
+ */
 static unsigned int arphook_in(void* priv, struct sk_buff* skb,
 	 						   const struct nf_hook_state* state) {
 	int ret = NF_ACCEPT;
@@ -787,18 +993,23 @@ static unsigned int arphook_in(void* priv, struct sk_buff* skb,
 
 	hdr = arp_hdr(skb);
 
+	// 只处理IP协议的ARP请求/应答
 	if(hdr->ar_pro != htons(ETH_P_IP)) {
 		return ret;
 	}
 
+	// 从ARP包中提取源MAC地址
 	mac = (u8*)(&(hdr->ar_op)) + 2;
 
+	// 检查该MAC地址是否在我们已知的虚拟机列表中
 	if(!(e = lookup_table(&mac_domid_map, (void*)(&(hdr->ar_op)) + 2))) {
 		return ret;
 	}
 
+	// 提取源IP地址
 	memcpy((void*)&ip, (void*)(&(hdr->ar_op)) + 2 + ETH_ALEN, 4);
 
+	// 如果该IP不在IP->DomID映射表中，则添加它
 	if(NULL == lookup_table_ip(&ip_domid_map, ip)) {
 		insert_table_ip(&ip_domid_map, ip, e);
 		DPRINTK("Added IP: %u to table\n", ip);
@@ -806,15 +1017,19 @@ static unsigned int arphook_in(void* priv, struct sk_buff* skb,
 
 	// NOTE: we now the same entry in our MAC and IP table,
 	// the IP table stores a pointer to the Entry allocated by the mac table
+	// 注意：现在MAC表和IP表中的同一个条目
+	// IP表存储一个指向由MAC表分配的Entry的指针
 
 	return ret;
 }
 
 
 
+// 定义Netfilter钩子结构
 struct nf_hook_ops iphook_in_ops = {
 	.hook = iphook_in,
 	.pf = PF_INET, // NOTE: this should be NFPROTO_IPV4, which is the same as PF_INET (and the same as AF_INET) however this is hardcoded for both
+	// 注意：这里应该是NFPROTO_IPV4，它与PF_INET（以及AF_INET）相同，但这里对两者都进行了硬编码
 	.hooknum = NF_INET_PRE_ROUTING,
 	.priority = 10,
 };
@@ -822,7 +1037,9 @@ struct nf_hook_ops iphook_in_ops = {
 struct nf_hook_ops iphook_out_ops = {
 	.hook = iphook_out,
 	.pf = PF_INET, // NOTE: should be NFPROTO_IPV4, same reason as with 'iphook_in_ops' above
+	// 注意：应该是NFPROTO_IPV4，原因同上'iphook_in_ops'
 	.hooknum = NF_INET_LOCAL_OUT, // NOTE: this used to be NF_INET_POST_ROUTING, but since we do IP lookup instead of MAC lookup we can hook further up in the stack
+	// 注意：这以前是NF_INET_POST_ROUTING，但由于我们进行IP查找而不是MAC查找，我们可以在协议栈中更早地挂钩
 	.priority = 10,
 };
 
@@ -833,12 +1050,18 @@ struct nf_hook_ops hook_arp_ops = {
 	.priority = 10,
 };
 
+/**
+ * @brief 初始化网络相关的部分。
+ *
+ * @return 成功返回0，失败返回错误码。
+ */
 int net_init(void)
 {
 	int ret = 0;
 
 	TRACE_ENTRY;
 
+	// 根据模块参数获取网络设备
 	NIC = dev_get_by_name(&init_net, nic);
 
 	if(!NIC) {
@@ -849,6 +1072,7 @@ int net_init(void)
 
 	DB("Using interface %s, MTU: %d bytes\n", NIC->name, NIC->mtu);
 
+	// 注册Netfilter钩子
 	ret = nf_register_net_hook(&init_net, &iphook_out_ops);
 	if (ret < 0) {
 		EPRINTK("can't register OUT hook.\n");
@@ -865,6 +1089,7 @@ int net_init(void)
 		goto out;
 	}
 
+	// 注册用于接收会话管理消息的packet_type
 	dev_add_pack(&xenloop_ptype);
 
 out:
@@ -872,12 +1097,16 @@ out:
 	return ret;
 }
 
+/**
+ * @brief 清理网络相关的资源。
+ */
 void net_exit(void)
 {
 	TRACE_ENTRY;
 
 	dev_remove_pack(&xenloop_ptype);
 
+	// 注销Netfilter钩子
 	nf_unregister_net_hook(&init_net, &iphook_in_ops);
 	nf_unregister_net_hook(&init_net, &iphook_out_ops);
 	nf_unregister_net_hook(&init_net, &hook_arp_ops);
@@ -887,25 +1116,31 @@ void net_exit(void)
 	TRACE_EXIT;
 }
 
+/**
+ * @brief 在虚拟机迁移前执行的操作。
+ */
 void pre_migration(void)
 {
 	TRACE_ENTRY;
 
-	write_xenstore(0);
-	freezed = 1;
-	mark_suspend(&mac_domid_map);
+	write_xenstore(0); // 通知Dom0本VM将要挂起
+	freezed = 1; // 冻结模块活动
+	mark_suspend(&mac_domid_map); // 将所有连接标记为挂起
 
-	wake_up_interruptible(&swq);
+	wake_up_interruptible(&swq); // 唤醒挂起处理线程
 	TRACE_EXIT;
 	return;
 }
 
+/**
+ * @brief 在虚拟机迁移后执行的操作。
+ */
 void post_migration(void)
 {
 	TRACE_ENTRY;
 
-	freezed = 0;
-	write_xenstore(1);
+	freezed = 0; // 解冻模块
+	write_xenstore(1); // 通知Dom0本VM已恢复
 
 	TRACE_EXIT;
 	return;
@@ -914,14 +1149,23 @@ void post_migration(void)
 
 #define LONG_PENDING_TIMEOUT 1 // seconds
 #define SHORT_PENDING_TIMEOUT 1 // jiffies
+/**
+ * @brief 内核线程函数，用于处理待发送的数据包队列。
+ *
+ * @param useless 未使用。
+ * @return 总是返回0。
+ */
 static int xmit_pending(void *useless)
 {
 	unsigned long timeout;
 	TRACE_ENTRY;
 
 	while(!kthread_should_stop()) {
+		// 根据队列是否为空设置不同的等待超时
 		timeout = out_queue.count ? SHORT_PENDING_TIMEOUT : LONG_PENDING_TIMEOUT*HZ;
+		// 等待被唤醒或超时
 		wait_event_interruptible_timeout(pending_wq, (out_queue.count > 0), timeout);
+		// 处理队列中的数据包
 		xmit_packets(NULL);
 	}
 	TRACE_EXIT;
@@ -929,16 +1173,24 @@ static int xmit_pending(void *useless)
 }
 
 #define SUSPEND_TIMEOUT 5
+/**
+ * @brief 内核线程函数，用于检查和清理挂起的或超时的连接。
+ *
+ * @param useless 未使用。
+ * @return 总是返回0。
+ */
 static int check_suspend(void *useless) {
 	int ret;
 	TRACE_ENTRY;
 
 	while(!kthread_should_stop()) {
+		// 等待有挂起条目或超时
 		ret = wait_event_interruptible_timeout(swq, has_suspend_entry(&mac_domid_map), SUSPEND_TIMEOUT*HZ);
 		if (ret > 0) {
-			// we have something suspended that we need to cleanup
+			// 如果被唤醒，说明有挂起的条目需要清理
 			clean_suspended_entries(&mac_domid_map);
 		} else if (ret == 0) {
+			// 如果是超时，则检查所有连接是否超时
 			check_timeout(&mac_domid_map);
 		}
 	}
@@ -947,6 +1199,13 @@ static int check_suspend(void *useless) {
 }
 
 
+/**
+ * @brief Xenbus watch回调函数，用于处理挂起/恢复事件。
+ *
+ * @param watch xenbus_watch结构体。
+ * @param path 事件路径。
+ * @param token 事件令牌。
+ */
 static void suspend_resume_handler(struct xenbus_watch *watch,
                              const char *path, const char* token)
 {
@@ -960,11 +1219,13 @@ static void suspend_resume_handler(struct xenbus_watch *watch,
 	int prev_state = cur_state;
 
 
+	// 首次调用时，初始化状态为RESUMED
 	if( prev_state == SR_UNDEFINED ) {
 		cur_state = SR_RESUMED;
 		return;
 	}
 
+        // 检查control目录下的shutdown文件是否存在，以判断是否进入挂起状态
         dir = xenbus_directory(XBT_NIL, "control", "", &dir_n);
         if (IS_ERR(dir)) {
 		EPRINTK("ERROR\n");
@@ -982,9 +1243,11 @@ static void suspend_resume_handler(struct xenbus_watch *watch,
 		break;
 	}
 
+	// 如果状态没有变化，则不作处理
 	if( prev_state == cur_state)
 		goto out;
 
+	// 根据状态变化调用相应的处理函数
 	switch(cur_state)  {
 
 	case SR_SUSPENDED:
@@ -1002,33 +1265,43 @@ out:
 }
 
 
+// 定义一个xenbus_watch来监控control/shutdown路径
 static struct xenbus_watch suspend_resume_watch = {
         .node = "control/shutdown",
         .callback = suspend_resume_handler
 };
 
+/**
+ * @brief 模块退出函数。
+ */
 static void xenloop_exit(void)
 {
 
 	TRACE_ENTRY;
 
-	write_xenstore(0);
+	write_xenstore(0); // 通知Dom0模块将要卸载
 	freezed = 1;
 
+	// 停止内核线程
 	if(pending_thread)
 		kthread_stop(pending_thread);
 
 	// mark everything as suspended
+	// 将所有连接标记为挂起
 	mark_suspend(&mac_domid_map);
 
 	if(suspend_thread)
 		kthread_stop(suspend_thread);
 
+	// 注销xenbus watch
 	unregister_xenbus_watch(&suspend_resume_watch);
 
+	// 清理网络资源
 	net_exit();
 
 	// NOTE: we don't clean the IP table since all of it's memory references Entries in the mac table
+	// 注意：我们不清理IP表，因为它所有的内存都引用了MAC表中的条目
+	// 清理哈希表
 	clean_table(&mac_domid_map);
 
 	DPRINTK("Exiting xenloop module.\n");
@@ -1036,10 +1309,16 @@ static void xenloop_exit(void)
 }
 
 
+/**
+ * @brief 模块初始化函数。
+ *
+ * @return 成功返回0，失败返回错误码。
+ */
 static int __init xenloop_init(void)
 {
 	int rc = 0;
 
+	// 检查是否传入了必要的nic参数
 	if(nic == NULL) {
 		EPRINTK("no NIC device name passed in as module parameter, exiting\n");
 		rc = -EINVAL;
@@ -1048,6 +1327,7 @@ static int __init xenloop_init(void)
 
 	TRACE_ENTRY;
 
+	// 初始化队列
 	out_queue.head = NULL;
 	out_queue.tail = NULL;
 	out_queue.count = 0;
@@ -1057,6 +1337,7 @@ static int __init xenloop_init(void)
 	pending_free.count = 0;
 
 
+	// 初始化哈希表
 	if(init_hash_table(&mac_domid_map, "MAC_DOMID_MAP_Table") != 0) {
 		rc = -ENOMEM;
 		goto out;
@@ -1064,34 +1345,43 @@ static int __init xenloop_init(void)
 
 	// NOTE: this should never fail, since we allocate no memory
 	// leave the error check here in case we have a failure case in the future
+	// 注意：这应该永远不会失败，因为我们没有分配内存
+	// 保留错误检查以防将来出现失败情况
 	if(init_hash_table_ip(&ip_domid_map) != 0) {
 		rc = -ENOMEM;
 		goto out;
 	}
 
+	// 获取本地域ID和MAC地址
 	my_domid = get_my_domid();
 	probe_vifs();
 
+	// 初始化网络
 	if ((rc = net_init()) < 0) {
 		EPRINTK("session_init(): net_init failed\n");
 		clean_table(&mac_domid_map);
 		// NOTE: we don't clean the IP table since all of it's memory references Entries in the mac table
+		// 注意：我们不清理IP表，因为它所有的内存都引用了MAC表中的条目
 		goto out;
 	}
 
+	// 向XenStore写入状态
 	if((rc = write_xenstore(1))) {
 		EPRINTK("Failed to write to xenstore, permissions error?\n");
 		net_exit();
 		clean_table(&mac_domid_map);
 		// NOTE: we don't clean the IP table since all of it's memory references Entries in the mac table
+		// 注意：我们不清理IP表，因为它所有的内存都引用了MAC表中的条目
 		goto out;
 	}
 
+	// 注册xenbus watch
 	rc = register_xenbus_watch(&suspend_resume_watch);
         if (rc) {
                 EPRINTK("Failed to set shutdown watcher\n");
         }
 
+	// 创建并运行内核线程
 	pending_thread = kthread_run(xmit_pending, NULL, "pending");
 	if(!pending_thread) {
 		xenloop_exit();
