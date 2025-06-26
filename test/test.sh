@@ -1,8 +1,8 @@
 #!/bin/bash
 
 TIME="120" # seconds
-IP_DOMU="10.10.10.169"
-IP_DOM0="10.10.10.1"
+IP_DOMU="10.12.134.100"
+IP_DOM0="10.12.134.39"
 
 echo starting test on $HOSTNAME
 echo remote domU IP: $IP_DOMU
