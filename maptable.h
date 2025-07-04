@@ -46,7 +46,7 @@
 
 
 #define XENLOOP_ACK_TIMEOUT 5
-#define DISCOVER_TIMEOUT 1
+#define DISCOVER_TIMEOUT 10  // 增加到10秒，给连接更多时间
 
 
 #define XENLOOP_HASH_SIZE 64

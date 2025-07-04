@@ -105,10 +105,14 @@ extern int xf_disconnect(xf_handle_t *xfc);
 /*
  * @brief 获取 FIFO 中当前存储的数据条目数量
  * @param h FIFO 句柄
- * @return FIFO 中的数据量
+ * @return FIFO 中的数据量，如果句柄无效返回 0
  */
 static inline uint32_t xf_size(xf_handle_t *h)
 {
+	if (!h || !h->descriptor) {
+		printk(KERN_ERR "xf_size: Invalid handle or descriptor\n");
+		return 0;
+	}
 	return h->descriptor->back - h->descriptor->front;
 }
 
@@ -116,10 +120,14 @@ static inline uint32_t xf_size(xf_handle_t *h)
 /*
  * @brief 获取 FIFO 的剩余可用空间（可以容纳的数据条目数量）
  * @param h FIFO 句柄
- * @return FIFO 的可用空间
+ * @return FIFO 的可用空间，如果句柄无效返回 0
  */
 static inline uint32_t xf_free(xf_handle_t *h)
 {
+	if (!h || !h->descriptor) {
+		printk(KERN_ERR "xf_free: Invalid handle or descriptor\n");
+		return 0;
+	}
 	return  h->descriptor->max_data_entries - xf_size(h);
 }
 
@@ -279,17 +287,29 @@ _xf_ret;								\
 
 /*
  * @brief 返回指向 FIFO 中指定索引位置的条目的指针
- * @note 不检查索引是否在 front 和 back 指针之间
+ * @note 不检查索引是否在 front 和 back 指针之间，但会检查指针有效性
  * @param handle FIFO 句柄
  * @param type 数据类型
  * @param index 从 front 开始的偏移量
- * @return 指向指定条目的指针
+ * @return 指向指定条目的指针，如果句柄无效返回 NULL
  */
 #define xf_entry(handle, type, index) (					\
 { 									\
-type * _xf_ret;								\
+type * _xf_ret = NULL;							\
 do									\
 {									\
+	if (!handle) {							\
+		printk(KERN_ERR "xf_entry: handle is NULL\n");		\
+		break;							\
+	}								\
+	if (!handle->descriptor) {					\
+		printk(KERN_ERR "xf_entry: descriptor is NULL\n");	\
+		break;							\
+	}								\
+	if (!handle->fifo) {						\
+		printk(KERN_ERR "xf_entry: fifo is NULL\n");		\
+		break;							\
+	}								\
 	xf_descriptor_t *_xf_des = handle->descriptor;			\
 	type *_xf_fifo = (type *)handle->fifo;				\
 									\

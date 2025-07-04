@@ -626,16 +626,18 @@ static int xenloop_connect(message_t *msg, Entry *e)
 
 	// 检查传入的grant reference和端口号是否有效
 	if(msg->gref_in <= 0 || msg->gref_out <= 0 || msg->remote_port <= 0) {
-		EPRINTK("gref_in %d gref_out %d remote_port %d\n", msg->gref_in, msg->gref_out, msg->remote_port);
+		EPRINTK("Invalid parameters: gref_in %d gref_out %d remote_port %d\n", 
+			msg->gref_in, msg->gref_out, msg->remote_port);
 		goto err;
 	}
 
+	DPRINTK("DEBUG: Attempting to connect with gref_in=%d, gref_out=%d, remote_port=%d, remote_domid=%d\n",
+		msg->gref_in, msg->gref_out, msg->remote_port, remote_domid);
 
 	// 连接到远端提供的FIFO
-	bfc = bf_connect(remote_domid, msg->gref_out, msg->gref_in,\
-				 msg->remote_port);
+	bfc = bf_connect(remote_domid, msg->gref_out, msg->gref_in, msg->remote_port);
 	if(!bfc) {
-		EPRINTK("bf_connect failed\n");
+		EPRINTK("bf_connect failed for domid %d\n", remote_domid);
 		goto err;
 	}
 
@@ -675,6 +677,21 @@ static int xmit_large_pkt(struct sk_buff *skb, xf_handle_t *xfh)
 	BUG_ON(!skb);
 	BUG_ON(!xfh);
 
+	// 添加调试信息：检查 xfh 的内容
+	if (!xfh->descriptor) {
+		EPRINTK("ERROR: xfh->descriptor is NULL!\n");
+		return -1;
+	}
+
+	if (!xfh->fifo) {
+		EPRINTK("ERROR: xfh->fifo is NULL!\n");
+		return -1;
+	}
+
+	// DPRINTK("DEBUG: xmit_large_pkt - skb->len=%u, fifo=%p, descriptor=%p, num_pages=%u, max_entries=%u\n",
+	// 	skb->len, xfh->fifo, xfh->descriptor, 
+	// 	xfh->descriptor->num_pages, xfh->descriptor->max_data_entries);
+
 	// 检查FIFO是否有足够空间
 	if( skb->len + sizeof(bf_data_t) > xf_free(xfh)*sizeof(bf_data_t) ) {
 		TRACE_EXIT;
@@ -683,7 +700,10 @@ static int xmit_large_pkt(struct sk_buff *skb, xf_handle_t *xfh)
 
 	// 在FIFO中预留一个条目用于存储元数据
 	mdata  = xf_entry(xfh, bf_data_t, xf_size(xfh));
-	BUG_ON(!mdata);
+	if (!mdata) {
+		EPRINTK("ERROR: xf_entry returned NULL pointer!\n");
+		return -1;
+	}
 
 	mdata->status = BF_WAITING; // 标记为等待处理
 	mdata->type = BF_PACKET;    // 类型为数据包
@@ -824,7 +844,26 @@ inline int xmit_packets(struct sk_buff *skb)
 		// 不过这个查找的开销可以忽略不计
 		// 根据目的IP地址查找对应的连接条目
 		e = lookup_table_ip(&ip_domid_map, ip_hdr(skb)->daddr);
-		BUG_ON(!e);
+		if (!e) {
+			EPRINTK("ERROR: lookup_table_ip failed for IP %pI4\n", &ip_hdr(skb)->daddr);
+			dequeue(&out_queue);
+			kfree_skb(skb);
+			continue;
+		}
+
+		if (!e->bfh) {
+			EPRINTK("ERROR: Entry has NULL bfh for IP %pI4\n", &ip_hdr(skb)->daddr);
+			dequeue(&out_queue);
+			kfree_skb(skb);
+			continue;
+		}
+
+		if (!e->bfh->out) {
+			EPRINTK("ERROR: bfh has NULL out FIFO for IP %pI4\n", &ip_hdr(skb)->daddr);
+			dequeue(&out_queue);
+			kfree_skb(skb);
+			continue;
+		}
 
 		// 发送数据包
 		rc = xmit_large_pkt(skb, e->bfh->out);

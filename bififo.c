@@ -100,8 +100,8 @@ static inline void copy_large_pkt(bf_data_t * mdata, struct sk_buff *skb, xf_han
 	TRACE_ENTRY;
 
     // 为 skb 预留以太网头和一些额外空间，然后放入数据
-    skb_reserve(skb, 2 + ETH_HLEN);
-    skb_put(skb, mdata->pkt_info);
+        skb_reserve(skb, 2 + ETH_HLEN);
+        skb_put(skb, mdata->pkt_info);
 
 	pkt_len = mdata->pkt_info;
 	// 计算数据包占用的 FIFO 条目数
@@ -136,14 +136,14 @@ static inline void copy_large_pkt(bf_data_t * mdata, struct sk_buff *skb, xf_han
 	}
 
     // 设置 skb 的网络层相关信息
-    skb->mac_header = (__u16)(skb->data - skb->head) + ETH_HLEN;
-    skb->ip_summed = CHECKSUM_UNNECESSARY; // XenLoop 内部通信，无需校验和
-    skb->pkt_type = PACKET_HOST;
-    skb->protocol = htons(ETH_P_IP);
-    skb->dev = NIC;
-    skb_shinfo(skb)->nr_frags = 0;
-    skb_shinfo(skb)->frag_list = NULL;
-    skb_shinfo(skb)->frags[0].bv_page = NULL;
+        skb->mac_header = (__u16)(skb->data - skb->head) + ETH_HLEN;
+    	skb->ip_summed = CHECKSUM_UNNECESSARY; // XenLoop 内部通信，无需校验和
+        skb->pkt_type = PACKET_HOST;
+        skb->protocol = htons(ETH_P_IP);
+        skb->dev = NIC;
+        skb_shinfo(skb)->nr_frags = 0;
+        skb_shinfo(skb)->frag_list = NULL;
+        skb_shinfo(skb)->frags[0].bv_page = NULL;
 
 	TRACE_EXIT;
 }
@@ -166,10 +166,10 @@ static inline struct sk_buff * copy_packet(xf_handle_t * xfh)
 	BUG_ON(!data);
 
     // 分配 skb
-    skb = alloc_skb(data->pkt_info + 2 + ETH_HLEN, GFP_ATOMIC);
-    if (!skb) {
+        skb = alloc_skb(data->pkt_info + 2 + ETH_HLEN, GFP_ATOMIC);
+        if (!skb) {
 		DB("Cannot allocate skb for size %d\n", data->pkt_info + 2 + ETH_HLEN);
-		goto out;
+                goto out;
 	}
 
 	// 复制数据包内容
@@ -528,24 +528,39 @@ bf_handle_t *bf_connect(domid_t rdomid, int rgref_in, int rgref_out, uint32_t rp
 	bfc->remote_domid = rdomid;
 	// 连接到远程的 FIFO
 	// 注意：远程的 'in' 是我们的 'out'，远程的 'out' 是我们的 'in'
+	DPRINTK("DEBUG: Attempting to connect output FIFO (rgref_out=%d)\n", rgref_out);
 	bfc->out = xf_connect(rdomid, rgref_out);
+	if (!bfc->out) {
+		EPRINTK("Failed to connect output FIFO with gref %d\n", rgref_out);
+		goto err;
+	}
+	
+	DPRINTK("DEBUG: Attempting to connect input FIFO (rgref_in=%d)\n", rgref_in);
 	bfc->in = xf_connect(rdomid, rgref_in);
+	if (!bfc->in) {
+		EPRINTK("Failed to connect input FIFO with gref %d\n", rgref_in);
+		goto err;
+	}
+	
 	if(!bfc->out || !bfc->in) {
 		EPRINTK("Can't allocate bfc->in %p or bfc->out %p\n", bfc->in, bfc->out);
 		goto err;
 	}
 
 	// 绑定到远程的事件通道
+	DPRINTK("DEBUG: Attempting to bind event channel (rport=%u)\n", rport);
 	ret = bind_evtch(rdomid, rport, &bfc->port, &bfc->irq, (void *)bfc);
 	if(ret < 0) {
-		EPRINTK("Can't bind to event channel\n");
+		EPRINTK("Can't bind to event channel (port %u)\n", rport);
 		goto err;
 	}
 
+	DPRINTK("DEBUG: bf_connect successful, local_port=%u, local_irq=%d\n", bfc->port, bfc->irq);
 	TRACE_EXIT;
 	return bfc;
 err:
 	// 错误处理：断开已建立的连接
+	EPRINTK("ERROR: Exiting bf_connect\n");
 	bf_disconnect(bfc);
 	TRACE_ERROR;
 	return NULL;

@@ -100,12 +100,15 @@ xf_handle_t *xf_create(domid_t remote_domid, unsigned int entry_size, unsigned i
 
 
 	// 初始化句柄和描述符
-	xfl->listen_flag = 1; // 标记为监听端
-	xfl->remote_id = remote_domid;
-	xfl->descriptor->suspended_flag = 0;
-	xfl->descriptor->max_data_entries = (1<<entry_order);
-	xfl->descriptor->index_mask = ~(0xffffffff<<entry_order);
-	xfl->descriptor->front = xfl->descriptor->back = 0;
+    xfl->listen_flag = 1; // 标记为监听端
+    xfl->remote_id = remote_domid;
+    xfl->descriptor->suspended_flag = 0;
+    xfl->descriptor->max_data_entries = (1<<entry_order);
+    xfl->descriptor->index_mask = ~(0xffffffff<<entry_order);
+    xfl->descriptor->front = xfl->descriptor->back = 0;
+
+    /* 内存屏障，确保对描述符的写入对其他域可见 */
+    wmb();
 
 	// 授予远程域对描述符页的访问权限
 	xfl->descriptor->dgref = gnttab_grant_foreign_access(remote_domid, virt_to_mfn(xfl->descriptor), 0);
@@ -234,12 +237,74 @@ xf_handle_t *xf_connect(domid_t remote_domid, int remote_gref)
 	}
 
 	// 将我们本地的描述符页映射到对方客户虚拟机与我们共享的描述符页
-	gnttab_set_map_op(&map_op, (unsigned long)xfc->descriptor,
-				GNTMAP_host_map, remote_gref, remote_domid);
-	ret = HYPERVISOR_grant_table_op(GNTTABOP_map_grant_ref, &map_op, 1);
-	if( ret || (map_op.status != GNTST_okay) ) {
-		EPRINTK("HYPERVISOR_grant_table_op failed ret = %d status = %d\n", ret, map_op.status);
-		goto err;
+	// gnttab_set_map_op(&map_op, (unsigned long)xfc->descriptor,
+	// 			GNTMAP_host_map, remote_gref, remote_domid);
+	// ret = HYPERVISOR_grant_table_op(GNTTABOP_map_grant_ref, &map_op, 1);
+	// if( ret || (map_op.status != GNTST_okay) ) {
+	// 	EPRINTK("HYPERVISOR_grant_table_op failed ret = %d status = %d\n", ret, map_op.status);
+	// 	goto err;
+	// }
+	// 添加重试机制来处理时序问题
+    int retry;
+    for (retry = 0; retry < 3; retry++) {
+        gnttab_set_map_op(&map_op, (unsigned long)xfc->descriptor,
+                    GNTMAP_host_map, remote_gref, remote_domid);
+        ret = HYPERVISOR_grant_table_op(GNTTABOP_map_grant_ref, &map_op, 1);
+        if( ret || (map_op.status != GNTST_okay) ) {
+            EPRINTK("HYPERVISOR_grant_table_op failed ret = %d status = %d (retry %d/3)\n", 
+                ret, map_op.status, retry + 1);
+            if (retry < 2) {
+                // msleep(100); // 等待100ms后重试 - BUG: 不能在原子上下文中休眠!
+                continue;
+            }
+            goto err;
+        }
+
+		// 添加内存屏障，确保映射操作完成
+		mb();
+
+		// 调试：输出原始内存内容
+		DPRINTK("DEBUG: Raw descriptor content at %p: %02x %02x %02x %02x %02x %02x %02x %02x\n", 
+			xfc->descriptor,
+			((uint8_t*)xfc->descriptor)[0], ((uint8_t*)xfc->descriptor)[1],
+			((uint8_t*)xfc->descriptor)[2], ((uint8_t*)xfc->descriptor)[3],
+			((uint8_t*)xfc->descriptor)[4], ((uint8_t*)xfc->descriptor)[5],
+			((uint8_t*)xfc->descriptor)[6], ((uint8_t*)xfc->descriptor)[7]);
+
+		// 验证描述符内容的合理性
+		if (xfc->descriptor->num_pages == 0 || xfc->descriptor->num_pages > MAX_FIFO_PAGES) {
+			EPRINTK("Invalid num_pages in descriptor: %u (should be 1-%u) (retry %d/3)\n", 
+                xfc->descriptor->num_pages, MAX_FIFO_PAGES, retry + 1);
+            if (retry < 2) {
+                // 取消映射，准备重试
+                struct gnttab_unmap_grant_ref unmap_op;
+                gnttab_set_unmap_op(&unmap_op, (unsigned long)xfc->descriptor,
+                    GNTMAP_host_map, map_op.handle);
+                HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &unmap_op, 1);
+                // msleep(200); // 等待更长时间 - BUG: 不能在原子上下文中休眠!
+                continue;
+            }
+            goto err;
+		}
+
+		if (xfc->descriptor->max_data_entries == 0) {
+			EPRINTK("Invalid max_data_entries in descriptor: %u (retry %d/3)\n", 
+				xfc->descriptor->max_data_entries, retry + 1);
+			if (retry < 2) {
+				// 取消映射，准备重试
+				struct gnttab_unmap_grant_ref unmap_op;
+				gnttab_set_unmap_op(&unmap_op, (unsigned long)xfc->descriptor,
+					GNTMAP_host_map, map_op.handle);
+				HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &unmap_op, 1);
+				// msleep(200); - BUG: 不能在原子上下文中休眠!
+				continue;
+			}
+			goto err;
+		}
+
+		// 描述符有效，跳出重试循环
+		DPRINTK("DEBUG: descriptor validation successful on retry %d\n", retry + 1);
+		break;
 	}
 
 	// 初始化句柄
@@ -348,11 +413,12 @@ int xf_disconnect(xf_handle_t *xfc)
 		EPRINTK("HYPERVISOR_grant_table_op unmap failed ret = %d \n", ret);
 
 	// 根据 KEDR (内存泄漏检查工具) 的说法，这些页面没有被释放
-	kfree((void*)(xfc->descriptor)); // BUG 在这里，这似乎会导致页错误，或者稍后在 check_suspended_entries 中出现页错误
-	kfree((void*)xfc);
-	kfree(xfc->fifo);
-	// c2109347fac5445c03297c6354719dd220f782dc 这个提交似乎在这个问题上要少一些？
-	// 现在它在卸载时会产生页错误
+    // 修正 kfree 的顺序以避免 use-after-free
+    kfree(xfc->fifo);
+    kfree((void*)(xfc->descriptor));
+    kfree((void*)xfc);
+    // c2109347fac5445c03297c6354719dd220f782dc 这个提交似乎在这个问题上要少一些？
+    // 现在它在卸载时会产生页错误
 
 	TRACE_EXIT;
 	return 0;
