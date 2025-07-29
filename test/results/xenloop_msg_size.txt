@@ -1,0 +1,304 @@
+正在 dom2 上开始性能测试
+远程 domU IP: 10.12.134.100
+每次运行的测试时长: 30s
+
+正在 ping 远程 domU 以建立连接...
+PING 10.12.134.100 (10.12.134.100) 56(84) bytes of data.
+64 bytes from 10.12.134.100: icmp_seq=1 ttl=64 time=0.302 ms
+64 bytes from 10.12.134.100: icmp_seq=2 ttl=64 time=0.410 ms
+64 bytes from 10.12.134.100: icmp_seq=3 ttl=64 time=0.562 ms
+
+--- 10.12.134.100 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2031ms
+rtt min/avg/max/mdev = 0.302/0.424/0.562/0.106 ms
+
+=== 开始运行随消息大小变化的性能测试 ===
+
+-----------------------------------------------------
+--- 正在测试，消息大小: 64 字节 ---
+-----------------------------------------------------
+
+==> TCP 测试 (大小: 64B)
+TCP 吞吐量 (TCP_STREAM)
+MIGRATED TCP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+113.67
+
+TCP 事务处理速率 (TCP_RR)
+MIGRATED TCP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+3832.917,249.53
+
+==> UDP 测试 (大小: 64B)
+UDP 吞吐量 (UDP_STREAM)
+MIGRATED UDP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+65.67
+
+UDP 事务处理速率 (UDP_RR)
+MIGRATED UDP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+30110.282,30.10
+
+-----------------------------------------------------
+--- 正在测试，消息大小: 128 字节 ---
+-----------------------------------------------------
+
+==> TCP 测试 (大小: 128B)
+TCP 吞吐量 (TCP_STREAM)
+MIGRATED TCP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+161.73
+
+TCP 事务处理速率 (TCP_RR)
+MIGRATED TCP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+29065.730,31.32
+
+==> UDP 测试 (大小: 128B)
+UDP 吞吐量 (UDP_STREAM)
+MIGRATED UDP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+61.36
+
+UDP 事务处理速率 (UDP_RR)
+MIGRATED UDP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+30211.652,30.03
+
+-----------------------------------------------------
+--- 正在测试，消息大小: 256 字节 ---
+-----------------------------------------------------
+
+==> TCP 测试 (大小: 256B)
+TCP 吞吐量 (TCP_STREAM)
+MIGRATED TCP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+315.84
+
+TCP 事务处理速率 (TCP_RR)
+MIGRATED TCP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+29018.795,31.36
+
+==> UDP 测试 (大小: 256B)
+UDP 吞吐量 (UDP_STREAM)
+MIGRATED UDP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+111.95
+
+UDP 事务处理速率 (UDP_RR)
+MIGRATED UDP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+30097.395,30.16
+
+-----------------------------------------------------
+--- 正在测试，消息大小: 512 字节 ---
+-----------------------------------------------------
+
+==> TCP 测试 (大小: 512B)
+TCP 吞吐量 (TCP_STREAM)
+MIGRATED TCP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+643.16
+
+TCP 事务处理速率 (TCP_RR)
+MIGRATED TCP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+28835.156,31.53
+
+==> UDP 测试 (大小: 512B)
+UDP 吞吐量 (UDP_STREAM)
+MIGRATED UDP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+228.53
+
+UDP 事务处理速率 (UDP_RR)
+MIGRATED UDP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+30095.617,30.16
+
+-----------------------------------------------------
+--- 正在测试，消息大小: 1024 字节 ---
+-----------------------------------------------------
+
+==> TCP 测试 (大小: 1024B)
+TCP 吞吐量 (TCP_STREAM)
+MIGRATED TCP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+1097.79
+
+TCP 事务处理速率 (TCP_RR)
+MIGRATED TCP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+28796.060,31.63
+
+==> UDP 测试 (大小: 1024B)
+UDP 吞吐量 (UDP_STREAM)
+MIGRATED UDP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+421.10
+
+UDP 事务处理速率 (UDP_RR)
+MIGRATED UDP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+29761.884,30.53
+
+-----------------------------------------------------
+--- 正在测试，消息大小: 2048 字节 ---
+-----------------------------------------------------
+
+==> TCP 测试 (大小: 2048B)
+TCP 吞吐量 (TCP_STREAM)
+MIGRATED TCP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+1624.48
+
+TCP 事务处理速率 (TCP_RR)
+MIGRATED TCP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+26810.409,34.17
+
+==> UDP 测试 (大小: 2048B)
+UDP 吞吐量 (UDP_STREAM)
+MIGRATED UDP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+1148.25
+
+UDP 事务处理速率 (UDP_RR)
+MIGRATED UDP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+28523.667,31.93
+
+-----------------------------------------------------
+--- 正在测试，消息大小: 4096 字节 ---
+-----------------------------------------------------
+
+==> TCP 测试 (大小: 4096B)
+TCP 吞吐量 (TCP_STREAM)
+MIGRATED TCP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+3212.96
+
+TCP 事务处理速率 (TCP_RR)
+MIGRATED TCP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+26064.902,35.24
+
+==> UDP 测试 (大小: 4096B)
+UDP 吞吐量 (UDP_STREAM)
+MIGRATED UDP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+2386.41
+
+UDP 事务处理速率 (UDP_RR)
+MIGRATED UDP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+27560.123,33.20
+
+-----------------------------------------------------
+--- 正在测试，消息大小: 8192 字节 ---
+-----------------------------------------------------
+
+==> TCP 测试 (大小: 8192B)
+TCP 吞吐量 (TCP_STREAM)
+MIGRATED TCP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+6571.06
+
+TCP 事务处理速率 (TCP_RR)
+MIGRATED TCP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+24515.183,37.67
+
+==> UDP 测试 (大小: 8192B)
+UDP 吞吐量 (UDP_STREAM)
+MIGRATED UDP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+5719.79
+
+UDP 事务处理速率 (UDP_RR)
+MIGRATED UDP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+24320.964,38.01
+
+-----------------------------------------------------
+--- 正在测试，消息大小: 16384 字节 ---
+-----------------------------------------------------
+
+==> TCP 测试 (大小: 16384B)
+TCP 吞吐量 (TCP_STREAM)
+MIGRATED TCP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+12081.38
+
+TCP 事务处理速率 (TCP_RR)
+MIGRATED TCP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+22569.626,41.14
+
+==> UDP 测试 (大小: 16384B)
+UDP 吞吐量 (UDP_STREAM)
+MIGRATED UDP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+14093.64
+
+UDP 事务处理速率 (UDP_RR)
+MIGRATED UDP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+20711.634,45.16
+
+-----------------------------------------------------
+--- 正在测试，消息大小: 32768 字节 ---
+-----------------------------------------------------
+
+==> TCP 测试 (大小: 32768B)
+TCP 吞吐量 (TCP_STREAM)
+MIGRATED TCP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+20693.56
+
+TCP 事务处理速率 (TCP_RR)
+MIGRATED TCP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+18627.300,50.54
+
+==> UDP 测试 (大小: 32768B)
+UDP 吞吐量 (UDP_STREAM)
+MIGRATED UDP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+19084.53
+
+UDP 事务处理速率 (UDP_RR)
+MIGRATED UDP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+16279.745,58.33
+
+-----------------------------------------------------
+--- 正在测试，消息大小: 65500 字节 ---
+-----------------------------------------------------
+
+==> TCP 测试 (大小: 65500B)
+TCP 吞吐量 (TCP_STREAM)
+MIGRATED TCP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+24443.25
+
+TCP 事务处理速率 (TCP_RR)
+MIGRATED TCP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+14265.699,66.97
+
+==> UDP 测试 (大小: 65500B)
+UDP 吞吐量 (UDP_STREAM)
+MIGRATED UDP STREAM TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET
+Throughput
+23076.44
+
+UDP 事务处理速率 (UDP_RR)
+MIGRATED UDP REQUEST/RESPONSE TEST from 0.0.0.0 (0.0.0.0) port 0 AF_INET to 10.12.134.100 () port 0 AF_INET : first burst 0
+Transaction Rate Tran/s,Mean Latency Microseconds
+3695.678,261.10
+
+=====================================================
+所有测试已完成。
