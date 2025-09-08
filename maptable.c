@@ -127,9 +127,16 @@ inline void remove_entry(HashTable *ht, Entry *e, struct list_head *x) {
 	// change status first, so suspend doesn't call this while we're disconnecting
 	e->status  = XENLOOP_STATUS_INIT;
 	if (e->bfh) {
-		if(e->listen_flag) {
-			bf_destroy(e->bfh);
+		if (e->resource_owner) {
+			if(e->listen_flag) {
+				DPRINTK("Resource owner destroying FIFO\n");
+				bf_destroy(e->bfh);
+			} else {
+				DPRINTK("Resource owner disconnecting FIFO\n");
+                bf_disconnect(e->bfh);
+			}
 		} else {
+            DPRINTK("Resource user disconnecting from FIFO\n");
 			bf_disconnect(e->bfh);
 		}
 		e->bfh = NULL;
@@ -165,6 +172,12 @@ inline void remove_entry_mac(HashTable* ht, void* mac) {
 // remove the reference to an entry at an IP
 inline void remove_entry_ip(HashTable* ht, u32 ip) {
 	ulong flags;
+
+	if (!ht || !ht->table) {
+		EPRINTK("Invalid hash table in remove_entry_ip\n");
+		return;
+	}
+
 	Bucket * b = &ht->table[hash_ip(ip)];
 
 	if(!list_empty(&b->bucket)) {
@@ -172,12 +185,26 @@ inline void remove_entry_ip(HashTable* ht, u32 ip) {
 		Entry * e;
 		list_for_each(x, &(b->bucket)) {
 			e = list_entry(x, Entry, ip_mapping);
-			if(ip == e->ip) {
-				e->ip = 0;
+
+			if (!e || (unsigned long)e < PAGE_OFFSET) {
+                EPRINTK("Invalid entry pointer in remove_entry_ip: %p\n", e);
+                continue;
+            }
+
+			// 使用probe_kernel_read检查内存是否可访问
+            u32 entry_ip;
+            if (probe_kernel_read(&entry_ip, &e->ip, sizeof(u32)) != 0) {
+                EPRINTK("Cannot read entry IP field\n");
+                continue;
+            }
+
+			if(ip == entry_ip) {
+				// e->ip = 0;
 				spin_lock_irqsave(&glock, flags);
 				list_del(x);
 				ht->count--;
 				spin_unlock_irqrestore(&glock, flags);
+				DPRINTK("Removed IP mapping for %u\n", ip);
 				break;
 			}
 		}
@@ -403,6 +430,25 @@ int init_hash_table_ip(HashTable* ht) {
 	return 0;
 }
 
+void remove_ip_mapping_safe(HashTable* ht, u32 ip, Entry* target_entry) {
+    Bucket * b = &ht->table[hash_ip(ip)];
+    struct list_head *x, *y;
+    Entry *e;
+
+    if(!list_empty(&b->bucket)) {
+        list_for_each_safe(x, y, &(b->bucket)) {
+            e = list_entry(x, Entry, ip_mapping);
+            // 只有当Entry指针匹配时才删除，避免访问已释放的内存
+            if (e == target_entry && e->ip == ip) {
+                list_del(x);
+                ht->count--;
+                DPRINTK("Removed IP mapping for %u\n", ip);
+                break;
+            }
+        }
+    }
+}
+
 // remove all entries marked suspended
 void clean_suspended_entries(HashTable * ht, HashTable* ip_ht)
 {
@@ -410,21 +456,42 @@ void clean_suspended_entries(HashTable * ht, HashTable* ip_ht)
 	Entry *e;
 	struct list_head *x, *y;
 	Bucket * table = ht->table;
+	static DEFINE_SPINLOCK(cleanup_lock);
+    unsigned long flags;
 
 	DPRINTK("clean suspended entries\n");
+
+	spin_lock_irqsave(&cleanup_lock, flags);
 
 	for(i = 0; i < XENLOOP_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(table[i].bucket)) {
 			e = list_entry(x, Entry, mapping);
 			if (e->status == XENLOOP_STATUS_SUSPEND) {
 				if(e->ip) {
-					remove_entry_ip(ip_ht, e->ip);
+					// remove_entry_ip(ip_ht, e->ip);
+					remove_ip_mapping_safe(ip_ht, e->ip, e);
+					e->ip = 0;
 				}
 
-				remove_entry(ht, e, x);
+				// 只有资源所有者才清理条目
+                if (e->resource_owner) {
+                    DPRINTK("Cleaning entry for domid %d (resource_owner=%d)\n", 
+                           e->domid, e->resource_owner);
+                    remove_entry(ht, e, x);
+                } else {
+                    DPRINTK("Skipping cleanup for domid %d (not resource owner)\n", e->domid);
+                    // 非资源所有者只断开连接，不删除条目
+                    if (e->bfh) {
+                        bf_disconnect(e->bfh);
+                        e->bfh = NULL;
+                    }
+                    e->status = XENLOOP_STATUS_INIT; // 重置状态，等待重连
+                }
 			}
 		}
 	}
+
+	spin_unlock_irqrestore(&cleanup_lock, flags);
 }
 
 // remove all entries in the table

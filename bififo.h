@@ -113,6 +113,7 @@ typedef struct Entry {
 	u32		ip;		// 远程域的 IP 地址
 	u8		status;		// 连接状态 (XENLOOP_STATUS_*)
 	u8		listen_flag;	// 是否为监听端
+	u8		resource_owner; // 是否拥有资源 (1: 拥有, 0: 不拥有)
 	u8		retry_count;	// 重试计数
 	domid_t		domid;		// 远程域 ID
 	ulong		timestamp;	// 时间戳

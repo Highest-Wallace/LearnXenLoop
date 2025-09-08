@@ -441,6 +441,7 @@ void send_create_chn_msg(int gref_in, int gref_out, int remote_port, u8 *dest_ma
 	m->gref_in = gref_in;
 	m->gref_out = gref_out;
 	m->remote_port = remote_port;
+	m->resource_owner = 1; // 发送方拥有资源
 
 	net_send(skb, dest_mac);
 
@@ -580,6 +581,7 @@ static int xenloop_listen(Entry *e)
 	}
 
 	e->listen_flag = 1; // 标记为监听方
+	e->resource_owner = 1; // 标记为资源所有者
 	e->bfh = bfl;
 
 
@@ -642,6 +644,7 @@ static int xenloop_connect(message_t *msg, Entry *e)
 	}
 
 	e->listen_flag = 0; // 标记为连接方
+	e->resource_owner = 0; // 标记为不拥有资源
 	e->bfh = bfc;
 
 	e->status = XENLOOP_STATUS_CONNECTED;
@@ -1321,9 +1324,17 @@ static void xenloop_exit(void)
 	write_xenstore(0); // 通知Dom0模块将要卸载
 	freezed = 1;
 
+	if(suspend_thread && !IS_ERR(suspend_thread)) {
+        kthread_stop(suspend_thread);
+        suspend_thread = NULL;
+    }
+
 	// 停止内核线程
 	if(pending_thread)
 		kthread_stop(pending_thread);
+
+	// 等待一段时间让对方检测到状态变化
+    msleep(1000);
 
 	// mark everything as suspended
 	// 将所有连接标记为挂起
@@ -1331,6 +1342,9 @@ static void xenloop_exit(void)
 
 	if(suspend_thread)
 		kthread_stop(suspend_thread);
+
+	// 再等待一段时间确保清理完成
+    msleep(500);
 
 	// 注销xenbus watch
 	unregister_xenbus_watch(&suspend_resume_watch);

@@ -58,6 +58,7 @@ typedef struct message {
 	int		gref_in;
 	int		gref_out;
 	uint32_t		remote_port;
+	u8 resource_owner;  // 新增：标识资源所有者 (1: 发送方拥有资源, 0: 接收方拥有资源)
 
 } message_t;
 
