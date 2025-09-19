@@ -1,0 +1,18 @@
+If:
+  PathMatch: .*\.c
+Diagnostics:
+  ClangTidy:
+    Add: modernize-loop-convert
+  UnusedIncludes: Strict
+  MissingIncludes: Strict
+  Suppress:
+    - missing-includes
+CompileFlags:
+  Remove:
+    - -mpreferred-stack-boundary=3
+    - -mindirect-branch=thunk-extern
+    - -mindirect-branch-register
+    - -fno-var-tracking-assignments
+    - -flive-patching=inline-clone
+    - -fconserve-stack
+    - -mrecord-mcount

@@ -31,40 +31,36 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-
-
 #ifndef _DISCOVERY_H_
 #define _DISCOVERY_H_
 
 #define DISCOVER_TIMEOUT 1
 
-typedef struct ethhdr 		ethhdr;
-#define XENLOOP_MSG_TYPE_SESSION_DISCOVER 	77
+typedef struct ethhdr ethhdr;
+#define XENLOOP_MSG_TYPE_SESSION_DISCOVER 77
 
+#define ETH_P_TIDC 0x8888
 
-
-#define ETH_P_TIDC			0x8888
-
-#define	MAX_MAC_NUM	 10
+#define MAX_MAC_NUM 10
 
 typedef struct message {
-	u8		type;
+	u8 type;
 
-	u8		mac_count;
-	u8		mac[MAX_MAC_NUM][ETH_ALEN];
-	domid_t 	domid;
-	domid_t	        guest_domids[MAX_MAC_NUM];
+	u8 mac_count;
+	u8 mac[MAX_MAC_NUM][ETH_ALEN];
+	domid_t domid;
+	domid_t guest_domids[MAX_MAC_NUM];
 
-	int		gref_in;
-	int		gref_out;
-	uint32_t		remote_port;
-	u8 resource_owner;  // 新增：标识资源所有者 (1: 发送方拥有资源, 0: 接收方拥有资源)
+	int gref_in;
+	int gref_out;
+	uint32_t remote_port;
+	u8 resource_owner; // 新增：标识资源所有者 (1: 发送方拥有资源, 0:
+	                   // 接收方拥有资源)
 
 } message_t;
 
-#define LINK_HDR 			sizeof(struct ethhdr)
-#define MSGSIZE				sizeof(message_t)
-const int 		headers = LINK_HDR + MSGSIZE;
-
+#define LINK_HDR sizeof(struct ethhdr)
+#define MSGSIZE sizeof(message_t)
+const int headers = LINK_HDR + MSGSIZE;
 
 #endif /* _DISCOVERY_H_ */

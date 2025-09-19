@@ -1,0 +1,9 @@
+
+# 缩进使用制表符（Tab）
+UseTab: ForIndentation
+# 缩进宽度为 4 个字符
+IndentWidth: 4
+# 一个制表符的宽度为 4 个字符
+TabWidth: 4
+# 每行最大字符数
+ColumnLimit: 80

@@ -31,9 +31,8 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-
-#include "debug.h"
 #include "xenfifo.h"
+#include "debug.h"
 #include <linux/vmalloc.h>
 
 /*
@@ -42,15 +41,16 @@
  *
  * @param remote_domid - 允许连接的远程域的 ID。
  * @param entry_size - FIFO 中每个条目的大小。
- * @param entry_order - FIFO 的最大容量，以 2 的幂表示。当前最大为 256。最大大小 = 2^16。
+ * @param entry_order - FIFO 的最大容量，以 2 的幂表示。当前最大为 256。最大大小
+ * = 2^16。
  *
  * @return 指向共享 FIFO 结构的指针，失败则返回 NULL。
  */
-xf_handle_t *xf_create(domid_t remote_domid, unsigned int entry_size, unsigned int entry_order)
-{
+xf_handle_t *xf_create(domid_t remote_domid, unsigned int entry_size,
+                       unsigned int entry_order) {
 	// 计算 FIFO 缓冲区所需的内存页阶数
-	unsigned long page_order = get_order(entry_size*(1<<entry_order));
-	xf_handle_t * xfl = NULL;
+	unsigned long page_order = get_order(entry_size * (1 << entry_order));
+	xf_handle_t *xfl = NULL;
 	int i;
 
 	TRACE_ENTRY;
@@ -61,73 +61,74 @@ xf_handle_t *xf_create(domid_t remote_domid, unsigned int entry_size, unsigned i
 	}
 
 	// 确保描述符结构的大小不超过一个页
-	if( sizeof(xf_descriptor_t) > PAGE_SIZE)
+	if (sizeof(xf_descriptor_t) > PAGE_SIZE)
 		BUG();
 
-
 	// 检查请求的页数是否超过最大限制
-	if( page_order > MAX_FIFO_PAGE_ORDER) {
-		EPRINTK("%d > 2^MAX_PAGE_ORDER pages requested for FIFO\n", 1<<page_order);
+	if (page_order > MAX_FIFO_PAGE_ORDER) {
+		EPRINTK("%d > 2^MAX_PAGE_ORDER pages requested for FIFO\n",
+		        1 << page_order);
 		goto err;
 	}
 
 	// 为 FIFO 句柄分配内存
 	xfl = kmalloc(sizeof(xf_handle_t), GFP_ATOMIC);
-	if(!xfl) {
+	if (!xfl) {
 		EPRINTK("Out of memory\n");
 		goto err;
 	}
 	memset(xfl, 0, sizeof(xf_handle_t));
 
-
 	// 为 FIFO 描述符分配一页内存
-	xfl->descriptor = (xf_descriptor_t*) kmalloc(PAGE_SIZE, GFP_ATOMIC);
-	if(!xfl->descriptor) {
+	xfl->descriptor = (xf_descriptor_t *)kmalloc(PAGE_SIZE, GFP_ATOMIC);
+	if (!xfl->descriptor) {
 		EPRINTK("Cannot allocate descriptor memory page for FIFO\n");
 		goto err;
 	}
 	// 设置 FIFO 缓冲区占用的页数
-	xfl->descriptor->num_pages = (1<<page_order);
+	xfl->descriptor->num_pages = (1 << page_order);
 
 	// 为 FIFO 缓冲区分配内存
-	xfl->fifo = (void*) kmalloc(xfl->descriptor->num_pages * PAGE_SIZE, GFP_ATOMIC);
-	if(!xfl->fifo) {
+	xfl->fifo =
+	    (void *)kmalloc(xfl->descriptor->num_pages * PAGE_SIZE, GFP_ATOMIC);
+	if (!xfl->fifo) {
 		EPRINTK("Cannot allocate buffer memory pages for FIFO\n");
 		goto err;
 	} else {
-		DPRINTK("Allocated %u memory pages for FIFO\n", (1<<page_order));
+		DPRINTK("Allocated %u memory pages for FIFO\n", (1 << page_order));
 	}
 
-
 	// 初始化句柄和描述符
-    xfl->listen_flag = 1; // 标记为监听端
-    xfl->remote_id = remote_domid;
-    xfl->descriptor->suspended_flag = 0;
-    xfl->descriptor->max_data_entries = (1<<entry_order);
-    xfl->descriptor->index_mask = ~(0xffffffff<<entry_order);
-    xfl->descriptor->front = xfl->descriptor->back = 0;
+	xfl->listen_flag = 1; // 标记为监听端
+	xfl->remote_id = remote_domid;
+	xfl->descriptor->suspended_flag = 0;
+	xfl->descriptor->max_data_entries = (1 << entry_order);
+	xfl->descriptor->index_mask = ~(0xffffffff << entry_order);
+	xfl->descriptor->front = xfl->descriptor->back = 0;
 
-    /* 内存屏障，确保对描述符的写入对其他域可见 */
-    wmb();
+	/* 内存屏障，确保对描述符的写入对其他域可见 */
+	wmb();
 
 	// 授予远程域对描述符页的访问权限
-	xfl->descriptor->dgref = gnttab_grant_foreign_access(remote_domid, virt_to_mfn(xfl->descriptor), 0);
-	if ( xfl->descriptor->dgref < 0) {
+	xfl->descriptor->dgref = gnttab_grant_foreign_access(
+	    remote_domid, virt_to_mfn(xfl->descriptor), 0);
+	if (xfl->descriptor->dgref < 0) {
 		EPRINTK("Cannot share descriptor gref page %p\n", xfl->descriptor);
 		goto err;
 	}
 
 	// 授予远程域对每个 FIFO 缓冲区页的访问权限
-	for( i=0; i < xfl->descriptor->num_pages; i++) {
+	for (i = 0; i < xfl->descriptor->num_pages; i++) {
 
-		xfl->descriptor->grefs[i] =
-				gnttab_grant_foreign_access(remote_domid,
-						virt_to_mfn(((uint8_t *)xfl->fifo) + i*PAGE_SIZE), 0);
+		xfl->descriptor->grefs[i] = gnttab_grant_foreign_access(
+		    remote_domid, virt_to_mfn(((uint8_t *)xfl->fifo) + i * PAGE_SIZE),
+		    0);
 
-		if ( xfl->descriptor->grefs[i] < 0) {
+		if (xfl->descriptor->grefs[i] < 0) {
 			EPRINTK("Cannot share FIFO %p page %d\n", xfl->fifo, i);
 			// 如果授权失败，撤销已经授予的权限
-			while(--i) gnttab_end_foreign_access_ref(xfl->descriptor->grefs[i], 0);
+			while (--i)
+				gnttab_end_foreign_access_ref(xfl->descriptor->grefs[i], 0);
 			gnttab_end_foreign_access_ref(xfl->descriptor->dgref, 0);
 			goto err;
 		}
@@ -138,12 +139,12 @@ xf_handle_t *xf_create(domid_t remote_domid, unsigned int entry_size, unsigned i
 
 err:
 	// 错误处理：释放所有已分配的资源
-	if( xfl) {
-		if(xfl->fifo) {
+	if (xfl) {
+		if (xfl->fifo) {
 			kfree(xfl->fifo);
 		}
 
-		if(xfl->descriptor) {
+		if (xfl->descriptor) {
 			kfree(xfl->descriptor);
 		}
 
@@ -161,8 +162,7 @@ err:
  * @param xfl 要销毁的 FIFO 的句柄
  * @return 成功返回 0，失败返回 -1
  */
-int xf_destroy(xf_handle_t *xfl)
-{
+int xf_destroy(xf_handle_t *xfl) {
 	int i;
 	unsigned int num_pages;
 	// 临时存储 grefs，因为 xfl->descriptor 即将被释放
@@ -171,7 +171,7 @@ int xf_destroy(xf_handle_t *xfl)
 
 	TRACE_ENTRY;
 
-	if(!xfl || !xfl->descriptor || !xfl->fifo) {
+	if (!xfl || !xfl->descriptor || !xfl->fifo) {
 		EPRINTK("xfl OR descriptor OR fifo is NULL\n");
 		goto err;
 	}
@@ -179,7 +179,7 @@ int xf_destroy(xf_handle_t *xfl)
 	num_pages = xfl->descriptor->num_pages;
 
 	// 复制 grefs，以便在释放描述符后仍能使用它们
-	for(i=0; i < num_pages; i++) {
+	for (i = 0; i < num_pages; i++) {
 		grefs[i] = xfl->descriptor->grefs[i];
 	}
 	dgref = xfl->descriptor->dgref;
@@ -190,7 +190,7 @@ int xf_destroy(xf_handle_t *xfl)
 	kfree(xfl);
 
 	// 结束对 FIFO 缓冲区页的外部访问授权
-	for(i=0; i < num_pages; i++) {
+	for (i = 0; i < num_pages; i++) {
 		gnttab_end_foreign_access_ref(grefs[i], 0);
 	}
 	// 结束对描述符页的外部访问授权
@@ -204,7 +204,6 @@ err:
 	return -1;
 }
 
-
 /*
  * @brief 连接到另一个域上的 FIFO 监听端
  * @param remote_domid 监听端所在的远程域 ID
@@ -212,8 +211,7 @@ err:
  * @return 连接成功则返回 FIFO 句柄，否则返回 NULL
  */
 
-xf_handle_t *xf_connect(domid_t remote_domid, int remote_gref)
-{
+xf_handle_t *xf_connect(domid_t remote_domid, int remote_gref) {
 	xf_handle_t *xfc = NULL;
 	struct gnttab_map_grant_ref map_op;
 	int ret;
@@ -222,16 +220,16 @@ xf_handle_t *xf_connect(domid_t remote_domid, int remote_gref)
 
 	// 为连接端的 FIFO 句柄分配内存
 	xfc = kmalloc(sizeof(xf_handle_t), GFP_ATOMIC);
-	if(!xfc) {
+	if (!xfc) {
 		EPRINTK("Out of memory\n");
 		goto err;
 	}
 	memset(xfc, 0, sizeof(xf_handle_t));
 
 	// 为本地描述符指针分配一页内存
-	xfc->descriptor = (xf_descriptor_t*) kmalloc(PAGE_SIZE, GFP_ATOMIC);
+	xfc->descriptor = (xf_descriptor_t *)kmalloc(PAGE_SIZE, GFP_ATOMIC);
 
-	if(!xfc->descriptor) {
+	if (!xfc->descriptor) {
 		EPRINTK("Cannot allocate memory page for descriptor\n");
 		goto err;
 	}
@@ -241,61 +239,69 @@ xf_handle_t *xf_connect(domid_t remote_domid, int remote_gref)
 	// 			GNTMAP_host_map, remote_gref, remote_domid);
 	// ret = HYPERVISOR_grant_table_op(GNTTABOP_map_grant_ref, &map_op, 1);
 	// if( ret || (map_op.status != GNTST_okay) ) {
-	// 	EPRINTK("HYPERVISOR_grant_table_op failed ret = %d status = %d\n", ret, map_op.status);
-	// 	goto err;
+	// 	EPRINTK("HYPERVISOR_grant_table_op failed ret = %d status = %d\n", ret,
+	// map_op.status); 	goto err;
 	// }
 	// 添加重试机制来处理时序问题
-    int retry;
-    for (retry = 0; retry < 3; retry++) {
-        gnttab_set_map_op(&map_op, (unsigned long)xfc->descriptor,
-                    GNTMAP_host_map, remote_gref, remote_domid);
-        ret = HYPERVISOR_grant_table_op(GNTTABOP_map_grant_ref, &map_op, 1);
-        if( ret || (map_op.status != GNTST_okay) ) {
-            EPRINTK("HYPERVISOR_grant_table_op failed ret = %d status = %d (retry %d/3)\n", 
-                ret, map_op.status, retry + 1);
-            if (retry < 2) {
-                // msleep(100); // 等待100ms后重试 - BUG: 不能在原子上下文中休眠!
-                continue;
-            }
-            goto err;
-        }
+	int retry;
+	for (retry = 0; retry < 3; retry++) {
+		gnttab_set_map_op(&map_op, (unsigned long)xfc->descriptor,
+		                  GNTMAP_host_map, remote_gref, remote_domid);
+		ret = HYPERVISOR_grant_table_op(GNTTABOP_map_grant_ref, &map_op, 1);
+		if (ret || (map_op.status != GNTST_okay)) {
+			EPRINTK("HYPERVISOR_grant_table_op failed ret = %d status = %d "
+			        "(retry %d/3)\n",
+			        ret, map_op.status, retry + 1);
+			if (retry < 2) {
+				// msleep(100); // 等待100ms后重试 - BUG:
+				// 不能在原子上下文中休眠!
+				continue;
+			}
+			goto err;
+		}
 
 		// 添加内存屏障，确保映射操作完成
 		mb();
 
 		// 调试：输出原始内存内容
-		DPRINTK("DEBUG: Raw descriptor content at %p: %02x %02x %02x %02x %02x %02x %02x %02x\n", 
-			xfc->descriptor,
-			((uint8_t*)xfc->descriptor)[0], ((uint8_t*)xfc->descriptor)[1],
-			((uint8_t*)xfc->descriptor)[2], ((uint8_t*)xfc->descriptor)[3],
-			((uint8_t*)xfc->descriptor)[4], ((uint8_t*)xfc->descriptor)[5],
-			((uint8_t*)xfc->descriptor)[6], ((uint8_t*)xfc->descriptor)[7]);
+		DPRINTK(
+		    "DEBUG: Raw descriptor content at %p: %02x %02x %02x %02x %02x "
+		    "%02x %02x %02x\n",
+		    xfc->descriptor, ((uint8_t *)xfc->descriptor)[0],
+		    ((uint8_t *)xfc->descriptor)[1], ((uint8_t *)xfc->descriptor)[2],
+		    ((uint8_t *)xfc->descriptor)[3], ((uint8_t *)xfc->descriptor)[4],
+		    ((uint8_t *)xfc->descriptor)[5], ((uint8_t *)xfc->descriptor)[6],
+		    ((uint8_t *)xfc->descriptor)[7]);
 
 		// 验证描述符内容的合理性
-		if (xfc->descriptor->num_pages == 0 || xfc->descriptor->num_pages > MAX_FIFO_PAGES) {
-			EPRINTK("Invalid num_pages in descriptor: %u (should be 1-%u) (retry %d/3)\n", 
-                xfc->descriptor->num_pages, MAX_FIFO_PAGES, retry + 1);
-            if (retry < 2) {
-                // 取消映射，准备重试
-                struct gnttab_unmap_grant_ref unmap_op;
-                gnttab_set_unmap_op(&unmap_op, (unsigned long)xfc->descriptor,
-                    GNTMAP_host_map, map_op.handle);
-                HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &unmap_op, 1);
-                // msleep(200); // 等待更长时间 - BUG: 不能在原子上下文中休眠!
-                continue;
-            }
-            goto err;
-		}
-
-		if (xfc->descriptor->max_data_entries == 0) {
-			EPRINTK("Invalid max_data_entries in descriptor: %u (retry %d/3)\n", 
-				xfc->descriptor->max_data_entries, retry + 1);
+		if (xfc->descriptor->num_pages == 0 ||
+		    xfc->descriptor->num_pages > MAX_FIFO_PAGES) {
+			EPRINTK("Invalid num_pages in descriptor: %u (should be 1-%u) "
+			        "(retry %d/3)\n",
+			        xfc->descriptor->num_pages, MAX_FIFO_PAGES, retry + 1);
 			if (retry < 2) {
 				// 取消映射，准备重试
 				struct gnttab_unmap_grant_ref unmap_op;
 				gnttab_set_unmap_op(&unmap_op, (unsigned long)xfc->descriptor,
-					GNTMAP_host_map, map_op.handle);
-				HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &unmap_op, 1);
+				                    GNTMAP_host_map, map_op.handle);
+				HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &unmap_op,
+				                          1);
+				// msleep(200); // 等待更长时间 - BUG: 不能在原子上下文中休眠!
+				continue;
+			}
+			goto err;
+		}
+
+		if (xfc->descriptor->max_data_entries == 0) {
+			EPRINTK("Invalid max_data_entries in descriptor: %u (retry %d/3)\n",
+			        xfc->descriptor->max_data_entries, retry + 1);
+			if (retry < 2) {
+				// 取消映射，准备重试
+				struct gnttab_unmap_grant_ref unmap_op;
+				gnttab_set_unmap_op(&unmap_op, (unsigned long)xfc->descriptor,
+				                    GNTMAP_host_map, map_op.handle);
+				HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &unmap_op,
+				                          1);
 				// msleep(200); - BUG: 不能在原子上下文中休眠!
 				continue;
 			}
@@ -303,7 +309,8 @@ xf_handle_t *xf_connect(domid_t remote_domid, int remote_gref)
 		}
 
 		// 描述符有效，跳出重试循环
-		DPRINTK("DEBUG: descriptor validation successful on retry %d\n", retry + 1);
+		DPRINTK("DEBUG: descriptor validation successful on retry %d\n",
+		        retry + 1);
 		break;
 	}
 
@@ -313,43 +320,51 @@ xf_handle_t *xf_connect(domid_t remote_domid, int remote_gref)
 	xfc->dhandle = map_op.handle; // 保存描述符页的映射句柄
 
 	// 根据描述符中记录的页数，为本地 FIFO 缓冲区分配内存
-	xfc->fifo = (void*) kmalloc(xfc->descriptor->num_pages * PAGE_SIZE, GFP_ATOMIC);
+	xfc->fifo =
+	    (void *)kmalloc(xfc->descriptor->num_pages * PAGE_SIZE, GFP_ATOMIC);
 
-	if(!xfc->fifo) {
-		EPRINTK("Cannot allocate %u memory pages for FIFO\n", xfc->descriptor->num_pages);
+	if (!xfc->fifo) {
+		EPRINTK("Cannot allocate %u memory pages for FIFO\n",
+		        xfc->descriptor->num_pages);
 		goto err;
 	} else {
-		DPRINTK("Allocated %u memory pages for FIFO\n", xfc->descriptor->num_pages);
+		DPRINTK("Allocated %u memory pages for FIFO\n",
+		        xfc->descriptor->num_pages);
 	}
 
 	// 将客户虚拟机的 FIFO 页映射到我们自己的页上
-	for(i=0; i < xfc->descriptor->num_pages; i++) {
-		gnttab_set_map_op(&map_op,
-				(unsigned long)(xfc->fifo + i*PAGE_SIZE),
-				GNTMAP_host_map, xfc->descriptor->grefs[i], remote_domid);
+	for (i = 0; i < xfc->descriptor->num_pages; i++) {
+		gnttab_set_map_op(&map_op, (unsigned long)(xfc->fifo + i * PAGE_SIZE),
+		                  GNTMAP_host_map, xfc->descriptor->grefs[i],
+		                  remote_domid);
 
 		ret = HYPERVISOR_grant_table_op(GNTTABOP_map_grant_ref, &map_op, 1);
 
-		if( ret || (map_op.status != GNTST_okay) ) {
+		if (ret || (map_op.status != GNTST_okay)) {
 			// 如果映射失败，需要取消所有已建立的映射
 			struct gnttab_unmap_grant_ref unmap_op;
 
-			EPRINTK("HYPERVISOR_grant_table_op failed ret = %d status = %d\n", ret, map_op.status);
-			while(--i >= 0) {
+			EPRINTK("HYPERVISOR_grant_table_op failed ret = %d status = %d\n",
+			        ret, map_op.status);
+			while (--i >= 0) {
 				gnttab_set_unmap_op(&unmap_op,
-					(unsigned long)xfc->fifo + i*PAGE_SIZE,
-					GNTMAP_host_map, xfc->fhandles[i]);
-				ret = HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &unmap_op, 1);
-				if( ret )
-					EPRINTK("HYPERVISOR_grant_table_op unmap failed ret = %d \n", ret);
+				                    (unsigned long)xfc->fifo + i * PAGE_SIZE,
+				                    GNTMAP_host_map, xfc->fhandles[i]);
+				ret = HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref,
+				                                &unmap_op, 1);
+				if (ret)
+					EPRINTK(
+					    "HYPERVISOR_grant_table_op unmap failed ret = %d \n",
+					    ret);
 			}
 
-			gnttab_set_unmap_op(&unmap_op,
-				(unsigned long)xfc->descriptor,
-				GNTMAP_host_map, xfc->dhandle);
-			ret = HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &unmap_op, 1);
-			if( ret )
-				EPRINTK("HYPERVISOR_grant_table_op unmap failed ret = %d \n", ret);
+			gnttab_set_unmap_op(&unmap_op, (unsigned long)xfc->descriptor,
+			                    GNTMAP_host_map, xfc->dhandle);
+			ret = HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &unmap_op,
+			                                1);
+			if (ret)
+				EPRINTK("HYPERVISOR_grant_table_op unmap failed ret = %d \n",
+				        ret);
 
 			goto err;
 		}
@@ -363,12 +378,12 @@ xf_handle_t *xf_connect(domid_t remote_domid, int remote_gref)
 
 err:
 	// 错误处理：释放所有已分配的资源
-	if(xfc) {
-		if(xfc->fifo) {
+	if (xfc) {
+		if (xfc->fifo) {
 			kfree(xfc->fifo);
 		}
 
-		if(xfc->descriptor) {
+		if (xfc->descriptor) {
 			kfree(xfc->descriptor);
 		}
 
@@ -383,13 +398,12 @@ err:
  * @param xfc 要断开的 FIFO 的句柄
  * @return 成功返回 0，失败返回 -1
  */
-int xf_disconnect(xf_handle_t *xfc)
-{
+int xf_disconnect(xf_handle_t *xfc) {
 	struct gnttab_unmap_grant_ref unmap_op;
 	int i, ret;
 	TRACE_ENTRY;
 
-	if(!xfc || !xfc->descriptor || !xfc->fifo) {
+	if (!xfc || !xfc->descriptor || !xfc->fifo) {
 		EPRINTK("Something is NULL\n");
 		goto err;
 	}
@@ -397,28 +411,31 @@ int xf_disconnect(xf_handle_t *xfc)
 	DPRINTK("descriptor: %p\n", xfc->descriptor);
 
 	// 取消对 FIFO 缓冲区页的映射
-	for(i=0; i < xfc->descriptor->num_pages; i++) {
-		gnttab_set_unmap_op(&unmap_op, (unsigned long)(xfc->fifo + i*PAGE_SIZE),
-			GNTMAP_host_map, xfc->fhandles[i]);
+	for (i = 0; i < xfc->descriptor->num_pages; i++) {
+		gnttab_set_unmap_op(&unmap_op,
+		                    (unsigned long)(xfc->fifo + i * PAGE_SIZE),
+		                    GNTMAP_host_map, xfc->fhandles[i]);
 		ret = HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &unmap_op, 1);
-		if( ret )
-			EPRINTK("HYPERVISOR_grant_table_op unmap failed for fifo page %d ret = %d \n", i, ret);
+		if (ret)
+			EPRINTK("HYPERVISOR_grant_table_op unmap failed for fifo page %d "
+			        "ret = %d \n",
+			        i, ret);
 	}
 
 	// 取消对描述符页的映射
 	gnttab_set_unmap_op(&unmap_op, (unsigned long)xfc->descriptor,
-			GNTMAP_host_map, xfc->dhandle);
+	                    GNTMAP_host_map, xfc->dhandle);
 	ret = HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &unmap_op, 1);
-	if( ret )
+	if (ret)
 		EPRINTK("HYPERVISOR_grant_table_op unmap failed ret = %d \n", ret);
 
 	// 根据 KEDR (内存泄漏检查工具) 的说法，这些页面没有被释放
-    // 修正 kfree 的顺序以避免 use-after-free
-    kfree(xfc->fifo);
-    kfree((void*)(xfc->descriptor));
-    kfree((void*)xfc);
-    // c2109347fac5445c03297c6354719dd220f782dc 这个提交似乎在这个问题上要少一些？
-    // 现在它在卸载时会产生页错误
+	// 修正 kfree 的顺序以避免 use-after-free
+	kfree(xfc->fifo);
+	kfree((void *)(xfc->descriptor));
+	kfree((void *)xfc);
+	// c2109347fac5445c03297c6354719dd220f782dc
+	// 这个提交似乎在这个问题上要少一些？ 现在它在卸载时会产生页错误
 
 	TRACE_EXIT;
 	return 0;

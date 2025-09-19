@@ -31,53 +31,50 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-
-
 #ifndef _MAIN_H_
 #define _MAIN_H_
 
-#define	MAX_MAC_NUM	10
+#define MAX_MAC_NUM 10
 #define MAX_RETRY_COUNT 5
 
-#define ETH_P_TIDC			0x8888
-typedef struct timeval      timeval;
-typedef struct list_head    list_head;
-typedef struct page         page;
-typedef struct ethhdr 		ethhdr;
-typedef struct net_device 	net_device;
-typedef struct packet_type 	packet_type;
+#define ETH_P_TIDC 0x8888
+typedef struct timeval timeval;
+typedef struct list_head list_head;
+typedef struct page page;
+typedef struct ethhdr ethhdr;
+typedef struct net_device net_device;
+typedef struct packet_type packet_type;
 
-#define XENLOOP_MSG_TYPE_SESSION_DISCOVER 	77
-#define XENLOOP_MSG_TYPE_SESSION_DISCOVER_ACK 	78
-#define XENLOOP_MSG_TYPE_CREATE_CHN		2
-#define XENLOOP_MSG_TYPE_CREATE_ACK 		4
-#define XENLOOP_MSG_TYPE_DESTROY_CHN 		8
+#define XENLOOP_MSG_TYPE_SESSION_DISCOVER 77
+#define XENLOOP_MSG_TYPE_SESSION_DISCOVER_ACK 78
+#define XENLOOP_MSG_TYPE_CREATE_CHN 2
+#define XENLOOP_MSG_TYPE_CREATE_ACK 4
+#define XENLOOP_MSG_TYPE_DESTROY_CHN 8
 
 #define XENLOOP_ENTRY_ORDER 15
 
-
 typedef struct message {
-	u8		type;
-	u8		mac_count;
-	u8		mac[MAX_MAC_NUM][ETH_ALEN];
+	u8 type;
+	u8 mac_count;
+	u8 mac[MAX_MAC_NUM][ETH_ALEN];
 	domid_t domid;
-	domid_t	guest_domids[MAX_MAC_NUM];
+	domid_t guest_domids[MAX_MAC_NUM];
 
-	int		gref_in;
-	int		gref_out;
-	int		remote_port;
-	u8 resource_owner;  // 新增：标识资源所有者 (1: 发送方拥有资源, 0: 接收方拥有资源)
+	int gref_in;
+	int gref_out;
+	int remote_port;
+	u8 resource_owner; // 新增：标识资源所有者 (1: 发送方拥有资源, 0:
+	                   // 接收方拥有资源)
 } message_t;
 
-typedef struct skb_queue{
-        struct sk_buff *head;
-        struct sk_buff *tail;
-        int count;
+typedef struct skb_queue {
+	struct sk_buff *head;
+	struct sk_buff *tail;
+	int count;
 } skb_queue_t;
 
-
-#define LINK_HDR 			sizeof(struct ethhdr)
-#define MSGSIZE				sizeof(message_t)
-const int 		headers = LINK_HDR + MSGSIZE;
+#define LINK_HDR sizeof(struct ethhdr)
+#define MSGSIZE sizeof(message_t)
+const int headers = LINK_HDR + MSGSIZE;
 
 #endif /* _MAIN_H_ */

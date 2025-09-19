@@ -31,47 +31,38 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-
 #include "maptable.h"
-#include "debug.h"
 #include "bififo.h"
+#include "debug.h"
 
 extern void send_destroy_chn_msg(u8 *dest_mac);
 extern wait_queue_head_t swq;
 
 static DEFINE_SPINLOCK(glock);
 
-ulong  hash(u8 *pmac){
+ulong hash(u8 *pmac) {
 	return (pmac[3] + pmac[4] + pmac[5]) % XENLOOP_HASH_SIZE;
 }
 
-
-int  equal(void *pmac1, void *pmac2)
-{
+int equal(void *pmac1, void *pmac2) {
 	if (memcmp(pmac1, pmac2, ETH_ALEN) == 0)
 		return 1;
 	else
 		return 0;
 };
 
-
 // hash an IPv4 address
-ulong hash_ip(u32 ip) {
-	return ip % XENLOOP_HASH_SIZE;
-}
+ulong hash_ip(u32 ip) { return ip % XENLOOP_HASH_SIZE; }
 
 // check if two IPv4 address are equal
 // returns 1 if equal, 0 otherwise
-int equal_ip(u32 ip1, u32 ip2) {
-	return ip1 == ip2;
-}
+int equal_ip(u32 ip1, u32 ip2) { return ip1 == ip2; }
 
 // insert into a table
 // key is a MAC address, value is a domid
-inline void insert_table(HashTable * ht, void * key, u8 domid)
-{
-	Bucket * b = &ht->table[hash(key)];
-	Entry * e;
+inline void insert_table(HashTable *ht, void *key, u8 domid) {
+	Bucket *b = &ht->table[hash(key)];
+	Entry *e;
 	ulong flags;
 
 	e = kmem_cache_alloc(ht->entries, GFP_ATOMIC);
@@ -95,8 +86,8 @@ inline void insert_table(HashTable * ht, void * key, u8 domid)
 // insert an Entry at an IPv4 key in a table
 // used for IP (not MAC) table
 // NOTE: pointer to reference is stored, not copied!
-inline void insert_table_ip(HashTable* ht, u32 ip, Entry* e) {
-	Bucket * b = &ht->table[hash_ip(ip)];
+inline void insert_table_ip(HashTable *ht, u32 ip, Entry *e) {
+	Bucket *b = &ht->table[hash_ip(ip)];
 	// Entry * e;
 	ulong flags;
 
@@ -114,7 +105,8 @@ inline void insert_table_ip(HashTable* ht, u32 ip, Entry* e) {
 }
 
 // remove an entry from the table
-// NOTE: deallocates memory for Entries, make sure it isn't references anywhere else
+// NOTE: deallocates memory for Entries, make sure it isn't references anywhere
+// else
 inline void remove_entry(HashTable *ht, Entry *e, struct list_head *x) {
 	ulong flags;
 
@@ -124,44 +116,45 @@ inline void remove_entry(HashTable *ht, Entry *e, struct list_head *x) {
 	ht->count--;
 	spin_unlock_irqrestore(&glock, flags);
 
-	// change status first, so suspend doesn't call this while we're disconnecting
-	e->status  = XENLOOP_STATUS_INIT;
+	// change status first, so suspend doesn't call this while we're
+	// disconnecting
+	e->status = XENLOOP_STATUS_INIT;
 	if (e->bfh) {
 		if (e->resource_owner) {
-			if(e->listen_flag) {
+			if (e->listen_flag) {
 				DPRINTK("Resource owner destroying FIFO\n");
 				bf_destroy(e->bfh);
 			} else {
 				DPRINTK("Resource owner disconnecting FIFO\n");
-                bf_disconnect(e->bfh);
+				bf_disconnect(e->bfh);
 			}
 		} else {
-            DPRINTK("Resource user disconnecting from FIFO\n");
+			DPRINTK("Resource user disconnecting from FIFO\n");
 			bf_disconnect(e->bfh);
 		}
 		e->bfh = NULL;
 	}
 
-	if(e->del_timer) {
+	if (e->del_timer) {
 		del_timer(&e->ack_timer);
 	}
 
 	kmem_cache_free(ht->entries, e);
-	DPRINTK("Delete Guest: deleted one guest mac =" MAC_FMT " Domid = %d.\n", \
-		 MAC_NTOA(e->mac), e->domid);
+	DPRINTK("Delete Guest: deleted one guest mac =" MAC_FMT " Domid = %d.\n",
+	        MAC_NTOA(e->mac), e->domid);
 	TRACE_EXIT;
 }
 
 // remove the entry keyed at MAC address 'mac'
-inline void remove_entry_mac(HashTable* ht, void* mac) {
-	Bucket * b = &ht->table[hash(mac)];
+inline void remove_entry_mac(HashTable *ht, void *mac) {
+	Bucket *b = &ht->table[hash(mac)];
 
-	if(!list_empty(&b->bucket)) {
-		struct list_head * x;
-		Entry * e;
+	if (!list_empty(&b->bucket)) {
+		struct list_head *x;
+		Entry *e;
 		list_for_each(x, &(b->bucket)) {
 			e = list_entry(x, Entry, mapping);
-			if(equal(mac, (u8 *) e->mac)) {
+			if (equal(mac, (u8 *)e->mac)) {
 				remove_entry(ht, e, x);
 				break;
 			}
@@ -170,7 +163,7 @@ inline void remove_entry_mac(HashTable* ht, void* mac) {
 }
 
 // remove the reference to an entry at an IP
-inline void remove_entry_ip(HashTable* ht, u32 ip) {
+inline void remove_entry_ip(HashTable *ht, u32 ip) {
 	ulong flags;
 
 	if (!ht || !ht->table) {
@@ -178,27 +171,27 @@ inline void remove_entry_ip(HashTable* ht, u32 ip) {
 		return;
 	}
 
-	Bucket * b = &ht->table[hash_ip(ip)];
+	Bucket *b = &ht->table[hash_ip(ip)];
 
-	if(!list_empty(&b->bucket)) {
-		struct list_head * x;
-		Entry * e;
+	if (!list_empty(&b->bucket)) {
+		struct list_head *x;
+		Entry *e;
 		list_for_each(x, &(b->bucket)) {
 			e = list_entry(x, Entry, ip_mapping);
 
 			if (!e || (unsigned long)e < PAGE_OFFSET) {
-                EPRINTK("Invalid entry pointer in remove_entry_ip: %p\n", e);
-                continue;
-            }
+				EPRINTK("Invalid entry pointer in remove_entry_ip: %p\n", e);
+				continue;
+			}
 
 			// 使用probe_kernel_read检查内存是否可访问
-            u32 entry_ip;
-            if (probe_kernel_read(&entry_ip, &e->ip, sizeof(u32)) != 0) {
-                EPRINTK("Cannot read entry IP field\n");
-                continue;
-            }
+			u32 entry_ip;
+			if (probe_kernel_read(&entry_ip, &e->ip, sizeof(u32)) != 0) {
+				EPRINTK("Cannot read entry IP field\n");
+				continue;
+			}
 
-			if(ip == entry_ip) {
+			if (ip == entry_ip) {
 				// e->ip = 0;
 				spin_lock_irqsave(&glock, flags);
 				list_del(x);
@@ -212,16 +205,15 @@ inline void remove_entry_ip(HashTable* ht, u32 ip) {
 }
 
 // lookup the Entry according to bififo handle pointer 'key'
-inline Entry* lookup_bfh(HashTable * ht, void * key)
-{
+inline Entry *lookup_bfh(HashTable *ht, void *key) {
 	int i;
-	struct list_head * x, * y;
-	Entry * e;
+	struct list_head *x, *y;
+	Entry *e;
 
-	for(i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(ht->table[i].bucket)) {
 			e = list_entry(x, Entry, mapping);
-			if(key ==  e->bfh) {
+			if (key == e->bfh) {
 				return e;
 			}
 		}
@@ -230,17 +222,16 @@ inline Entry* lookup_bfh(HashTable * ht, void * key)
 }
 
 // lookup a MAC address key in the table
-inline void * lookup_table(HashTable * ht, void * key)
-{
-	Entry * d = NULL;
-	Bucket * b = &ht->table[hash(key)];
+inline void *lookup_table(HashTable *ht, void *key) {
+	Entry *d = NULL;
+	Bucket *b = &ht->table[hash(key)];
 
-	if(!list_empty(&b->bucket)) {
-		struct list_head * x;
-		Entry * e;
+	if (!list_empty(&b->bucket)) {
+		struct list_head *x;
+		Entry *e;
 		list_for_each(x, &(b->bucket)) {
 			e = list_entry(x, Entry, mapping);
-			if(equal(key, (u8 *) e->mac)) {
+			if (equal(key, (u8 *)e->mac)) {
 				d = e;
 				break;
 			}
@@ -250,16 +241,16 @@ inline void * lookup_table(HashTable * ht, void * key)
 }
 
 // lookup an IP address key in the table
-inline void * lookup_table_ip(HashTable * ht, u32 ip) {
-	Entry * d = NULL;
-	Bucket * b = &ht->table[hash_ip(ip)];
+inline void *lookup_table_ip(HashTable *ht, u32 ip) {
+	Entry *d = NULL;
+	Bucket *b = &ht->table[hash_ip(ip)];
 
-	if(!list_empty(&b->bucket)) {
-		struct list_head * x;
-		Entry * e;
+	if (!list_empty(&b->bucket)) {
+		struct list_head *x;
+		Entry *e;
 		list_for_each(x, &(b->bucket)) {
 			e = list_entry(x, Entry, ip_mapping);
-			if(e->ip == ip) {
+			if (e->ip == ip) {
 				d = e;
 				break;
 			}
@@ -269,14 +260,13 @@ inline void * lookup_table_ip(HashTable * ht, u32 ip) {
 }
 
 // return 1 if there is a suspended entry in the table, 0 otherwise
-inline int has_suspend_entry(HashTable * ht)
-{
+inline int has_suspend_entry(HashTable *ht) {
 	int i;
 	Entry *e;
 	struct list_head *x, *y;
-	Bucket * table = ht->table;
+	Bucket *table = ht->table;
 
-	for(i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(table[i].bucket)) {
 			e = list_entry(x, Entry, mapping);
 			if (e->status == XENLOOP_STATUS_SUSPEND)
@@ -287,14 +277,13 @@ inline int has_suspend_entry(HashTable * ht)
 }
 
 // mark all entries in the table as suspended
-inline void mark_suspend(HashTable * ht)
-{
+inline void mark_suspend(HashTable *ht) {
 	int i;
 	Entry *e;
 	struct list_head *x, *y;
-	Bucket * table = ht->table;
+	Bucket *table = ht->table;
 	TRACE_ENTRY;
-	for(i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(table[i].bucket)) {
 			e = list_entry(x, Entry, mapping);
 			if (check_descriptor(e->bfh)) {
@@ -308,21 +297,21 @@ inline void mark_suspend(HashTable * ht)
 	TRACE_EXIT;
 }
 
-// notify all bififos in the table, sends an event to the other side of the bififos
-void notify_all_bfs(HashTable * ht)
-{
+// notify all bififos in the table, sends an event to the other side of the
+// bififos
+void notify_all_bfs(HashTable *ht) {
 	int i;
 	Entry *e;
 	struct list_head *x, *y;
-	Bucket * table = ht->table;
+	Bucket *table = ht->table;
 
 	TRACE_ENTRY;
 
-	for(i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(table[i].bucket)) {
 			e = list_entry(x, Entry, ip_mapping);
-			if ( check_descriptor(e->bfh) && (xf_size( e->bfh->out ) > 0) )
-					bf_notify(e->bfh->port);
+			if (check_descriptor(e->bfh) && (xf_size(e->bfh->out) > 0))
+				bf_notify(e->bfh->port);
 		}
 	}
 
@@ -331,17 +320,16 @@ void notify_all_bfs(HashTable * ht)
 
 // check if any entries have timed out (timestamps are too old)
 // mark them as suspended if they are
-inline void check_timeout(HashTable * ht)
-{
+inline void check_timeout(HashTable *ht) {
 	int i, found = 0;
 	Entry *e;
 	struct list_head *x, *y;
-	Bucket * table = ht->table;
+	Bucket *table = ht->table;
 
-	for(i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(table[i].bucket)) {
 			e = list_entry(x, Entry, mapping);
-	 		if ((jiffies - e->timestamp) > (5*DISCOVER_TIMEOUT*HZ)) {
+			if ((jiffies - e->timestamp) > (5 * DISCOVER_TIMEOUT * HZ)) {
 				if (check_descriptor(e->bfh)) {
 					BF_SUSPEND_IN(e->bfh) = 1;
 					BF_SUSPEND_OUT(e->bfh) = 1;
@@ -358,25 +346,22 @@ inline void check_timeout(HashTable * ht)
 }
 
 // update the timestamps in keys corresponding to the array of MAC address 'mac'
-inline void update_table(HashTable * ht, u8 *mac, int mac_count)
-{
-	int i,j,found = 0;
+inline void update_table(HashTable *ht, u8 *mac, int mac_count) {
+	int i, j, found = 0;
 	Entry *e;
 	void *p;
 	struct list_head *x, *y;
-	Bucket * table = ht->table;
+	Bucket *table = ht->table;
 
-
-	for(j = 0; j < XENLOOP_HASH_SIZE; j++) {
+	for (j = 0; j < XENLOOP_HASH_SIZE; j++) {
 		list_for_each_safe(x, y, &(table[j].bucket)) {
 			e = list_entry(x, Entry, mapping);
-			for(i = 0, p = mac;  i < mac_count; i++, p+= ETH_ALEN) {
+			for (i = 0, p = mac; i < mac_count; i++, p += ETH_ALEN) {
 				if (equal(p, e->mac)) {
 					e->timestamp = jiffies;
 					found = 1;
 					break;
 				}
-
 			}
 
 			if (found) {
@@ -396,19 +381,18 @@ inline void update_table(HashTable * ht, u8 *mac, int mac_count)
 
 // initialize a MAC hash table
 // NOTE: allocates kmeme cache for Entries
-int init_hash_table(HashTable * ht, char * name)
-{
+int init_hash_table(HashTable *ht, char *name) {
 	int i;
 
-	ht->count 	= 0;
+	ht->count = 0;
 	ht->entries = kmem_cache_create(name, sizeof(Entry), 0, 0, NULL);
 
-	if(!ht->entries) {
+	if (!ht->entries) {
 		EPRINTK("hashtable(): slab caches failed.\n");
 		return -ENOMEM;
 	}
 
-	for(i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
 		INIT_LIST_HEAD(&(ht->table[i].bucket));
 	}
 
@@ -417,76 +401,77 @@ int init_hash_table(HashTable * ht, char * name)
 
 // initialize an IP hash table
 // NOTE: does not allocate any memory, all Entries stored as references
-int init_hash_table_ip(HashTable* ht) {
+int init_hash_table_ip(HashTable *ht) {
 	int i;
 
-	ht->count 	= 0;
+	ht->count = 0;
 	ht->entries = NULL;
 
-	for(i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
 		INIT_LIST_HEAD(&(ht->table[i].bucket));
 	}
 
 	return 0;
 }
 
-void remove_ip_mapping_safe(HashTable* ht, u32 ip, Entry* target_entry) {
-    Bucket * b = &ht->table[hash_ip(ip)];
-    struct list_head *x, *y;
-    Entry *e;
+void remove_ip_mapping_safe(HashTable *ht, u32 ip, Entry *target_entry) {
+	Bucket *b = &ht->table[hash_ip(ip)];
+	struct list_head *x, *y;
+	Entry *e;
 
-    if(!list_empty(&b->bucket)) {
-        list_for_each_safe(x, y, &(b->bucket)) {
-            e = list_entry(x, Entry, ip_mapping);
-            // 只有当Entry指针匹配时才删除，避免访问已释放的内存
-            if (e == target_entry && e->ip == ip) {
-                list_del(x);
-                ht->count--;
-                DPRINTK("Removed IP mapping for %u\n", ip);
-                break;
-            }
-        }
-    }
+	if (!list_empty(&b->bucket)) {
+		list_for_each_safe(x, y, &(b->bucket)) {
+			e = list_entry(x, Entry, ip_mapping);
+			// 只有当Entry指针匹配时才删除，避免访问已释放的内存
+			if (e == target_entry && e->ip == ip) {
+				list_del(x);
+				ht->count--;
+				DPRINTK("Removed IP mapping for %u\n", ip);
+				break;
+			}
+		}
+	}
 }
 
 // remove all entries marked suspended
-void clean_suspended_entries(HashTable * ht, HashTable* ip_ht)
-{
+void clean_suspended_entries(HashTable *ht, HashTable *ip_ht) {
 	int i;
 	Entry *e;
 	struct list_head *x, *y;
-	Bucket * table = ht->table;
+	Bucket *table = ht->table;
 	static DEFINE_SPINLOCK(cleanup_lock);
-    unsigned long flags;
+	unsigned long flags;
 
 	DPRINTK("clean suspended entries\n");
 
 	spin_lock_irqsave(&cleanup_lock, flags);
 
-	for(i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(table[i].bucket)) {
 			e = list_entry(x, Entry, mapping);
 			if (e->status == XENLOOP_STATUS_SUSPEND) {
-				if(e->ip) {
+				if (e->ip) {
 					// remove_entry_ip(ip_ht, e->ip);
 					remove_ip_mapping_safe(ip_ht, e->ip, e);
 					e->ip = 0;
 				}
 
 				// 只有资源所有者才清理条目
-                if (e->resource_owner) {
-                    DPRINTK("Cleaning entry for domid %d (resource_owner=%d)\n", 
-                           e->domid, e->resource_owner);
-                    remove_entry(ht, e, x);
-                } else {
-                    DPRINTK("Skipping cleanup for domid %d (not resource owner)\n", e->domid);
-                    // 非资源所有者只断开连接，不删除条目
-                    if (e->bfh) {
-                        bf_disconnect(e->bfh);
-                        e->bfh = NULL;
-                    }
-                    e->status = XENLOOP_STATUS_INIT; // 重置状态，等待重连
-                }
+				if (e->resource_owner) {
+					DPRINTK("Cleaning entry for domid %d (resource_owner=%d)\n",
+					        e->domid, e->resource_owner);
+					remove_entry(ht, e, x);
+				} else {
+					DPRINTK(
+					    "Skipping cleanup for domid %d (not resource owner)\n",
+					    e->domid);
+					// 非资源所有者只断开连接，不删除条目
+					if (e->bfh) {
+						bf_disconnect(e->bfh);
+						e->bfh = NULL;
+					}
+					e->status = XENLOOP_STATUS_INIT; // 重置状态，等待重连
+				}
 			}
 		}
 	}
@@ -495,22 +480,21 @@ void clean_suspended_entries(HashTable * ht, HashTable* ip_ht)
 }
 
 // remove all entries in the table
-void clean_table(HashTable * ht)
-{
+void clean_table(HashTable *ht) {
 	int i;
 	Entry *e;
 	struct list_head *x, *y;
-	Bucket * table = ht->table;
+	Bucket *table = ht->table;
 
 	DPRINTK("clean table\n");
 
-	for(i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(table[i].bucket)) {
 			e = list_entry(x, Entry, mapping);
 			remove_entry(ht, e, x);
 		}
 	}
 
-    kmem_cache_destroy(ht->entries);
-	//BUG_ON(kmem_cache_destroy(ht->entries));
+	kmem_cache_destroy(ht->entries);
+	// BUG_ON(kmem_cache_destroy(ht->entries));
 }

@@ -31,42 +31,38 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-
 #ifndef _MAPTABLE_H
 #define _MAPTABLE_H
 
+#include <linux/if_ether.h>
+#include <linux/init.h>
+#include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/slab.h>
-#include <linux/init.h>
 #include <linux/timer.h>
-#include <linux/kernel.h>
-#include <linux/if_ether.h>
 
 #include "xenfifo.h"
 
-
 #define XENLOOP_ACK_TIMEOUT 5
-#define DISCOVER_TIMEOUT 10  // 增加到10秒，给连接更多时间
-
+#define DISCOVER_TIMEOUT 10 // 增加到10秒，给连接更多时间
 
 #define XENLOOP_HASH_SIZE 64
 
-ulong  hash(u8 *);
-int    equal(void *, void *);
+ulong hash(u8 *);
+int equal(void *, void *);
 
 typedef struct Bucket {
 	struct list_head bucket;
 } Bucket;
 
-
 typedef struct HashTable {
-	ulong 		count;
-	ulong		buckets;
-	Bucket  	table[XENLOOP_HASH_SIZE];
-	struct kmem_cache* entries;
+	ulong count;
+	ulong buckets;
+	Bucket table[XENLOOP_HASH_SIZE];
+	struct kmem_cache *entries;
 } HashTable;
 
-
-#define check_descriptor(bfh) (bfh && bfh->in && bfh->out && bfh->in->descriptor && bfh->out->descriptor)
+#define check_descriptor(bfh)                                                  \
+	(bfh && bfh->in && bfh->out && bfh->in->descriptor && bfh->out->descriptor)
 
 #endif /* _MAPTABLE_H_*/
