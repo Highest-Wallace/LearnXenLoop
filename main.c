@@ -60,8 +60,6 @@
 #include <linux/timer.h>
 #include <linux/wait.h>
 #include <net/dst.h>
-#include <net/inet_common.h>
-#include <net/inet_sock.h>
 #include <net/neighbour.h>
 #include <net/protocol.h>
 #include <net/sock.h>
