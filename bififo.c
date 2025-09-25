@@ -268,16 +268,26 @@ void free_evtch(uint32_t port, int irq, void *dev_id) {
 
 	TRACE_ENTRY;
 
-	if (irq)
+	if (irq) {
 		unbind_from_irqhandler(irq, dev_id);
+		DPRINTK("free port: %d\n", port);
+	}
 
 	if (port) {
 		memset(&op, 0, sizeof(op));
 		DPRINTK("free port: %u\n", port);
 		op.port = port;
 		ret = HYPERVISOR_event_channel_op(EVTCHNOP_close, &op);
-		if (ret != 0)
-			EPRINTK("Unable to cleanly close event channel, err: %d\n", ret);
+		if (ret) {
+			if (ret == -EINVAL) {
+				DPRINTK("Event channel %d was already closed\n", port);
+			} else {
+				EPRINTK("Unable to cleanly close event channel, err: %d\n",
+				        ret);
+			}
+		} else {
+			DPRINTK("Successfully closed event channel %d\n", port);
+		}
 	}
 
 	TRACE_EXIT;

@@ -403,39 +403,44 @@ int xf_disconnect(xf_handle_t *xfc) {
 	int i, ret;
 	TRACE_ENTRY;
 
-	if (!xfc || !xfc->descriptor || !xfc->fifo) {
-		EPRINTK("Something is NULL\n");
+	if (!xfc) {
+		EPRINTK("xfc is NULL\n");
 		goto err;
 	}
 
-	DPRINTK("descriptor: %p\n", xfc->descriptor);
+	if (xfc->descriptor && xfc->fifo) {
+		// 取消对 FIFO 缓冲区页的映射
+		for (i = 0; i < xfc->descriptor->num_pages; i++) {
+			gnttab_set_unmap_op(&unmap_op,
+			                    (unsigned long)(xfc->fifo + i * PAGE_SIZE),
+			                    GNTMAP_host_map, xfc->fhandles[i]);
+			ret = HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &unmap_op,
+			                                1);
+			if (ret)
+				EPRINTK(
+				    "HYPERVISOR_grant_table_op unmap failed for fifo page %d "
+				    "ret = %d \n",
+				    i, ret);
+		}
 
-	// 取消对 FIFO 缓冲区页的映射
-	for (i = 0; i < xfc->descriptor->num_pages; i++) {
-		gnttab_set_unmap_op(&unmap_op,
-		                    (unsigned long)(xfc->fifo + i * PAGE_SIZE),
-		                    GNTMAP_host_map, xfc->fhandles[i]);
-		ret = HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &unmap_op, 1);
-		if (ret)
-			EPRINTK("HYPERVISOR_grant_table_op unmap failed for fifo page %d "
-			        "ret = %d \n",
-			        i, ret);
+		// 注意：对于连接端，FIFO 内存是映射的共享内存，不需要 kfree
+		// 只需要取消映射即可，内存由监听端（资源所有者）管理
+		xfc->fifo = NULL;
 	}
 
-	// 取消对描述符页的映射
-	gnttab_set_unmap_op(&unmap_op, (unsigned long)xfc->descriptor,
-	                    GNTMAP_host_map, xfc->dhandle);
-	ret = HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &unmap_op, 1);
-	if (ret)
-		EPRINTK("HYPERVISOR_grant_table_op unmap failed ret = %d \n", ret);
+	if (xfc->descriptor) {
+		// 取消对描述符页的映射
+		gnttab_set_unmap_op(&unmap_op, (unsigned long)xfc->descriptor,
+		                    GNTMAP_host_map, xfc->dhandle);
+		ret = HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &unmap_op, 1);
+		if (ret)
+			EPRINTK("HYPERVISOR_grant_table_op unmap failed ret = %d \n", ret);
 
-	// 根据 KEDR (内存泄漏检查工具) 的说法，这些页面没有被释放
-	// 修正 kfree 的顺序以避免 use-after-free
-	kfree(xfc->fifo);
-	kfree((void *)(xfc->descriptor));
+		// 注意：对于连接端，描述符页也是映射的共享内存，不需要 kfree
+		xfc->descriptor = NULL;
+	}
+
 	kfree((void *)xfc);
-	// c2109347fac5445c03297c6354719dd220f782dc
-	// 这个提交似乎在这个问题上要少一些？ 现在它在卸载时会产生页错误
 
 	TRACE_EXIT;
 	return 0;

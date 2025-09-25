@@ -78,6 +78,7 @@ extern int has_suspend_entry(HashTable *);
 extern void clean_suspended_entries(HashTable *ht);
 extern void notify_all_bfs(HashTable *ht);
 extern void check_timeout(HashTable *ht);
+extern int has_active_connections(HashTable *ht);
 
 // 全局变量声明
 static domid_t my_domid;                  // 本地域（Domain）的ID
@@ -1193,6 +1194,8 @@ static int xmit_pending(void *useless) {
  */
 static int check_suspend(void *useless) {
 	int ret;
+	int idle_count = 0;       // 空闲计数器
+	int long_sleep_count = 0; // 长时间休眠计数器
 	TRACE_ENTRY;
 
 	while (!kthread_should_stop()) {
@@ -1202,9 +1205,39 @@ static int check_suspend(void *useless) {
 		if (ret > 0) {
 			// 如果被唤醒，说明有挂起的条目需要清理
 			clean_suspended_entries(&mac_domid_map);
+			idle_count = 0;
+			long_sleep_count = 0;
 		} else if (ret == 0) {
-			// 如果是超时，则检查所有连接是否超时
-			check_timeout(&mac_domid_map);
+			if (has_active_connections(&mac_domid_map)) {
+				check_timeout(&mac_domid_map);
+				idle_count = 0;
+				long_sleep_count = 0;
+			} else {
+				idle_count++;
+				if (idle_count > 5) {
+					long_sleep_count++;
+					if (long_sleep_count == 1) {
+						DPRINTK("Suspend thread entering longer sleep due to "
+						        "inactivity\n");
+					}
+
+					int sleep_time;
+					if (long_sleep_count < 3) {
+						sleep_time = SUSPEND_TIMEOUT * 1000 * 2; // 10秒
+					} else if (long_sleep_count < 6) {
+						sleep_time = SUSPEND_TIMEOUT * 1000 * 4; // 20秒
+					} else {
+						sleep_time = SUSPEND_TIMEOUT * 1000 * 6; // 30秒
+					}
+
+					msleep(sleep_time);
+					idle_count = 0;
+				}
+			}
+		} else {
+			// ret < 0, 被信号中断
+			idle_count = 0;
+			long_sleep_count = 0;
 		}
 	}
 	TRACE_EXIT;

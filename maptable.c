@@ -34,9 +34,11 @@
 #include "maptable.h"
 #include "bififo.h"
 #include "debug.h"
+#include <linux/types.h>
 
 extern void send_destroy_chn_msg(u8 *dest_mac);
 extern wait_queue_head_t swq;
+extern HashTable ip_domid_map; // 引用全局 IP 哈希表
 
 static DEFINE_SPINLOCK(glock);
 
@@ -204,6 +206,25 @@ inline void remove_entry_ip(HashTable *ht, u32 ip) {
 	}
 }
 
+void remove_ip_mapping_safe(HashTable *ht, u32 ip, Entry *target_entry) {
+	Bucket *b = &ht->table[hash_ip(ip)];
+	struct list_head *x, *y;
+	Entry *e;
+
+	if (!list_empty(&b->bucket)) {
+		list_for_each_safe(x, y, &(b->bucket)) {
+			e = list_entry(x, Entry, ip_mapping);
+			// 只有当Entry指针匹配时才删除，避免访问已释放的内存
+			if (e == target_entry && e->ip == ip) {
+				list_del(x);
+				ht->count--;
+				DPRINTK("Removed IP mapping for %u\n", ip);
+				break;
+			}
+		}
+	}
+}
+
 // lookup the Entry according to bififo handle pointer 'key'
 inline Entry *lookup_bfh(HashTable *ht, void *key) {
 	int i;
@@ -318,10 +339,8 @@ void notify_all_bfs(HashTable *ht) {
 	TRACE_EXIT;
 }
 
-// check if any entries have timed out (timestamps are too old)
-// mark them as suspended if they are
-inline void check_timeout(HashTable *ht) {
-	int i, found = 0;
+inline int has_active_connections(HashTable *ht) {
+	int i;
 	Entry *e;
 	struct list_head *x, *y;
 	Bucket *table = ht->table;
@@ -329,20 +348,103 @@ inline void check_timeout(HashTable *ht) {
 	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(table[i].bucket)) {
 			e = list_entry(x, Entry, mapping);
-			if ((jiffies - e->timestamp) > (5 * DISCOVER_TIMEOUT * HZ)) {
-				if (check_descriptor(e->bfh)) {
-					BF_SUSPEND_IN(e->bfh) = 1;
-					BF_SUSPEND_OUT(e->bfh) = 1;
-				}
-
-				DPRINTK("marking entry as suspended\n");
-				e->status = XENLOOP_STATUS_SUSPEND;
-				found = 1;
+			if (e->status == XENLOOP_STATUS_CONNECTED ||
+			    e->status == XENLOOP_STATUS_LISTEN) {
+				return 1;
 			}
 		}
 	}
-	if (found)
+	return 0;
+}
+
+// check if any entries have timed out (timestamps are too old)
+// mark them as suspended if they are
+inline void check_timeout(HashTable *ht) {
+	int i, found = 0;
+	Entry *e;
+	struct list_head *x, *y;
+	Bucket *table = ht->table;
+	static int consecutive_timeouts = 0; // 连续超时计数
+	int active_connections = 0;
+
+	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
+		list_for_each_safe(x, y, &(table[i].bucket)) {
+			e = list_entry(x, Entry, mapping);
+
+			if (e->status == XENLOOP_STATUS_CONNECTED ||
+			    e->status == XENLOOP_STATUS_LISTEN) {
+				active_connections++;
+			}
+		}
+	}
+
+	if (active_connections == 0) {
+		consecutive_timeouts++;
+		if (consecutive_timeouts > 3) { // 降低阈值，更快进入休眠
+			DPRINTK(
+			    "No active connections, suspend thread will sleep longer\n");
+			consecutive_timeouts = 0;
+		}
+		return; // 直接返回，不检查超时
+	}
+
+	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
+		list_for_each_safe(x, y, &(table[i].bucket)) {
+			e = list_entry(x, Entry, mapping);
+
+			if (e->status != XENLOOP_STATUS_CONNECTED &&
+			    e->status != XENLOOP_STATUS_LISTEN) {
+				continue;
+			}
+
+			if ((jiffies - e->timestamp) > (5 * DISCOVER_TIMEOUT * HZ)) {
+				// 检查连接是否真的断开
+				bool connection_alive = true;
+				if (e->bfh && check_descriptor(e->bfh)) {
+					// 尝试发送测试信号
+					struct evtchn_send op;
+					memset(&op, 0, sizeof(op));
+					op.port = e->bfh->port;
+					int ret = HYPERVISOR_event_channel_op(EVTCHNOP_send, &op);
+					if (ret != 0) {
+						connection_alive = false;
+						DPRINTK("Connection to domid %d appears dead "
+						        "(hypercall error: %d)\n",
+						        e->domid, ret);
+					}
+				} else {
+					connection_alive = false;
+				}
+
+				if (!connection_alive) {
+					// 连接确实断开，直接清理
+					DPRINTK("Removing dead connection to domid %d\n", e->domid);
+					if (e->ip) {
+						remove_ip_mapping_safe(&ip_domid_map, e->ip, e);
+					}
+					remove_entry(ht, e, x);
+					found = 1;
+				} else {
+					if (check_descriptor(e->bfh)) {
+						BF_SUSPEND_IN(e->bfh) = 1;
+						BF_SUSPEND_OUT(e->bfh) = 1;
+					}
+
+					DPRINTK("marking entry as suspended for domid %d\n",
+					        e->domid);
+					e->status = XENLOOP_STATUS_SUSPEND;
+					found = 1;
+				}
+			}
+		}
+	}
+
+	if (found) {
+		consecutive_timeouts = 0;
 		wake_up_interruptible(&swq);
+	} else {
+		consecutive_timeouts = 0; // 有活跃连接但没有超时时也重置计数器
+	}
 }
 
 // update the timestamps in keys corresponding to the array of MAC address 'mac'
@@ -414,33 +516,15 @@ int init_hash_table_ip(HashTable *ht) {
 	return 0;
 }
 
-void remove_ip_mapping_safe(HashTable *ht, u32 ip, Entry *target_entry) {
-	Bucket *b = &ht->table[hash_ip(ip)];
-	struct list_head *x, *y;
-	Entry *e;
-
-	if (!list_empty(&b->bucket)) {
-		list_for_each_safe(x, y, &(b->bucket)) {
-			e = list_entry(x, Entry, ip_mapping);
-			// 只有当Entry指针匹配时才删除，避免访问已释放的内存
-			if (e == target_entry && e->ip == ip) {
-				list_del(x);
-				ht->count--;
-				DPRINTK("Removed IP mapping for %u\n", ip);
-				break;
-			}
-		}
-	}
-}
-
 // remove all entries marked suspended
-void clean_suspended_entries(HashTable *ht, HashTable *ip_ht) {
+void clean_suspended_entries(HashTable *ht) {
 	int i;
 	Entry *e;
 	struct list_head *x, *y;
 	Bucket *table = ht->table;
 	static DEFINE_SPINLOCK(cleanup_lock);
 	unsigned long flags;
+	bool any_cleaned = false;
 
 	DPRINTK("clean suspended entries\n");
 
@@ -452,15 +536,41 @@ void clean_suspended_entries(HashTable *ht, HashTable *ip_ht) {
 			if (e->status == XENLOOP_STATUS_SUSPEND) {
 				if (e->ip) {
 					// remove_entry_ip(ip_ht, e->ip);
-					remove_ip_mapping_safe(ip_ht, e->ip, e);
+					remove_ip_mapping_safe(&ip_domid_map, e->ip, e);
 					e->ip = 0;
 				}
 
+				// 检查连接是否真的已经断开
+				// 如果 bfh 为 NULL 或者事件通道已经关闭，说明连接已断开
+				bool connection_broken = false;
+				if (!e->bfh) {
+					connection_broken = true;
+				} else {
+					if (!check_descriptor(e->bfh)) {
+						connection_broken = true;
+					} else {
+						struct evtchn_send op;
+						memset(&op, 0, sizeof(op));
+						op.port = e->bfh->port;
+						int ret =
+						    HYPERVISOR_event_channel_op(EVTCHNOP_send, &op);
+						if (ret != 0) {
+							connection_broken = true;
+							DPRINTK(
+							    "Connection to domid %d is broken (hypercall "
+							    "failed: %d)\n",
+							    e->domid, ret);
+						}
+					}
+				}
+
 				// 只有资源所有者才清理条目
-				if (e->resource_owner) {
-					DPRINTK("Cleaning entry for domid %d (resource_owner=%d)\n",
-					        e->domid, e->resource_owner);
+				if (e->resource_owner || connection_broken) {
+					DPRINTK("Cleaning entry for domid %d (resource_owner=%d, "
+					        "broken=%d)\n",
+					        e->domid, e->resource_owner, connection_broken);
 					remove_entry(ht, e, x);
+					any_cleaned = true;
 				} else {
 					DPRINTK(
 					    "Skipping cleanup for domid %d (not resource owner)\n",
@@ -477,6 +587,11 @@ void clean_suspended_entries(HashTable *ht, HashTable *ip_ht) {
 	}
 
 	spin_unlock_irqrestore(&cleanup_lock, flags);
+
+	// 如果没有清理任何条目，说明可能已经没有需要处理的挂起连接了
+	if (!any_cleaned) {
+		DPRINTK("No entries were cleaned, suspend thread may sleep longer\n");
+	}
 }
 
 // remove all entries in the table
