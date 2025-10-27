@@ -162,7 +162,8 @@ static inline uint32_t xf_push(xf_handle_t *handle) {
 }
 
 /*
- * @brief 将 n 个数据条目推入 FIFO 的尾部
+ * @brief 将 n 个数据条目推入 FIFO 的尾部 (生产者调用)
+ * @note 包含写内存屏障，确保数据先于指针更新对消费者可见。
  * @param handle FIFO 句柄
  * @param n 要推入的条目数量
  * @return 成功返回 0，失败（空间不足）返回 -1
@@ -173,6 +174,12 @@ static inline uint32_t xf_pushn(xf_handle_t *handle, uint32_t n) {
 	if (xf_free(handle) < n) {
 		return -1;
 	}
+
+	/*
+	 * 写内存屏障：确保在更新 back 指针之前，所有的数据写入操作
+	 * 都已经完成并对其他域可见。这是无锁实现的关键。
+	 */
+	wmb();
 
 	// 增加尾指针
 	des->back += n;
@@ -199,7 +206,8 @@ static inline uint32_t xf_pop(xf_handle_t *handle) {
 }
 
 /*
- * @brief 从 FIFO 头部弹出 n 个数据条目
+ * @brief 从 FIFO 头部弹出 n 个数据条目（消费者调用）
+ * @note 此函数本身不包含内存屏障，消费者应在读取数据前自行放置 rmb()
  * @param handle FIFO 句柄
  * @param n 要弹出的条目数量
  * @return 成功返回 0，失败（数据不足）返回 -1

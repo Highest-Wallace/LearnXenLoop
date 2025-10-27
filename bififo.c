@@ -157,6 +157,17 @@ static inline struct sk_buff *copy_packet(xf_handle_t *xfh) {
 
 	TRACE_ENTRY;
 
+	/*
+	 * 读内存屏障：确保在读取任何数据之前，我们已经看到了生产者
+	 * 对 back 指针的最新更新。这是无锁实现的关键。
+	 */
+	rmb();
+
+	// 检查队列是否真的有数据
+	if (xf_empty(xfh)) {
+		goto out;
+	}
+
 	// 获取 FIFO 头部的元数据
 	data = xf_front(xfh, bf_data_t);
 	BUG_ON(!data);
@@ -189,13 +200,13 @@ out:
  * @param bfh 指向双向 FIFO 句柄的指针。
  */
 void recv_packets(bf_handle_t *bfh) {
-	static DEFINE_SPINLOCK(recv_lock);
+	// static DEFINE_SPINLOCK(recv_lock);
 	struct sk_buff *skb;
-	unsigned long flags;
+	// unsigned long flags;
 
 	TRACE_ENTRY;
 
-	spin_lock_irqsave(&recv_lock, flags);
+	// spin_lock_irqsave(&recv_lock, flags);
 
 	// 循环直到输入 FIFO 为空
 	while (!xf_empty(bfh->in)) {
@@ -204,7 +215,7 @@ void recv_packets(bf_handle_t *bfh) {
 		if (!skb)
 			break;
 
-		spin_unlock_irqrestore(&recv_lock, flags);
+		// spin_unlock_irqrestore(&recv_lock, flags);
 
 		// DPRINTK("packet received through xenloop\n");
 		// 将接收到的包交给网络协议栈处理
@@ -214,10 +225,10 @@ void recv_packets(bf_handle_t *bfh) {
 		//       但可惜这些符号没有导出到内核模块中。
 		// ip_local_deliver(skb);
 
-		spin_lock_irqsave(&recv_lock, flags);
+		// spin_lock_irqsave(&recv_lock, flags);
 	}
 
-	spin_unlock_irqrestore(&recv_lock, flags);
+	// spin_unlock_irqrestore(&recv_lock, flags);
 
 	TRACE_EXIT;
 }

@@ -777,9 +777,9 @@ void clean_pending(skb_queue_t *Q) {
  * @return 成功返回0，失败返回-1。
  */
 inline int xmit_packets(struct sk_buff *skb) {
-	static DEFINE_SPINLOCK(xmit_lock);
+	// static DEFINE_SPINLOCK(xmit_lock);
 	int ret = 0;
-	unsigned long flags;
+	// unsigned long flags;
 	int rc;
 	Entry *e;
 
@@ -788,7 +788,7 @@ inline int xmit_packets(struct sk_buff *skb) {
 	BUG_ON(in_irq());
 
 	// 使用自旋锁保护队列访问
-	spin_lock_irqsave(&xmit_lock, flags);
+	// spin_lock_irqsave(&xmit_lock, flags);
 
 	if (skb) {
 		// 检查数据包大小是否超过FIFO容量
@@ -878,7 +878,7 @@ inline int xmit_packets(struct sk_buff *skb) {
 		kfree_skb(skb);
 	}
 
-	spin_unlock_irqrestore(&xmit_lock, flags);
+	// spin_unlock_irqrestore(&xmit_lock, flags);
 
 	// TODO why don't we onlt call notify on the bififos we updated? we'd have
 	// to track that we can't call notify while IRQs are masked for the same
