@@ -80,6 +80,8 @@ extern void notify_all_bfs(HashTable *ht);
 extern void check_timeout(HashTable *ht);
 extern int has_active_connections(HashTable *ht);
 
+extern int bf_notify_smart(bf_handle_t *bfh, unsigned int pkt_size);
+
 // 全局变量声明
 static domid_t my_domid;                  // 本地域（Domain）的ID
 static u8 my_macs[MAX_MAC_NUM][ETH_ALEN]; // 存储本地所有网络接口的MAC地址
@@ -637,7 +639,8 @@ err:
  * @param xfh 要使用的单向FIFO句柄。
  * @return 成功返回0，失败返回-1。
  */
-static int xmit_large_pkt(struct sk_buff *skb, xf_handle_t *xfh) {
+static int xmit_large_pkt(struct sk_buff *skb, xf_handle_t *xfh,
+                          bf_handle_t *bfh) {
 	bf_data_t *mdata;
 	char *pback, *pfront, *pfifo;
 	int num_entries, ret, len = 0, len1 = 0, len2 = 0;
@@ -782,6 +785,7 @@ inline int xmit_packets(struct sk_buff *skb) {
 	// unsigned long flags;
 	int rc;
 	Entry *e;
+	bf_handle_t *last_bfh = NULL;
 
 	TRACE_ENTRY;
 
@@ -838,7 +842,7 @@ inline int xmit_packets(struct sk_buff *skb) {
 		}
 
 		// 发送数据包
-		rc = xmit_large_pkt(skb, e->bfh->out);
+		rc = xmit_large_pkt(skb, e->bfh->out, e->bfh);
 
 		if (rc < 0) {
 			// EPRINTK("xmit_large_pkt failed: %d\n", rc);
@@ -875,6 +879,10 @@ inline int xmit_packets(struct sk_buff *skb) {
 		// 发送成功，出队并释放skb
 		dequeue(&out_queue);
 
+		// 使用智能批处理通知
+		bf_notify_smart(e->bfh, skb->len);
+		last_bfh = e->bfh;
+
 		kfree_skb(skb);
 	}
 
@@ -888,7 +896,7 @@ inline int xmit_packets(struct sk_buff *skb) {
 	// 我们不能在IRQ被屏蔽时调用notify，原因同上，它可能会锁住CPU
 	// 在上面的循环中调用bf_notify似乎证实了这个理论，因为CPU锁死了
 	// 通知所有可能接收了数据的对端VM
-	notify_all_bfs(&ip_domid_map);
+	// notify_all_bfs(&ip_domid_map);
 
 	TRACE_EXIT;
 	return ret;

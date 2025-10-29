@@ -45,6 +45,43 @@
 #define BF_PROCESSING 1 // 正在处理
 #define BF_FREE 2       // 空闲
 
+// 批处理模式定义
+#define BF_NOTIFY_MODE_IMMEDIATE 0   // 立即通知（原有模式）
+#define BF_NOTIFY_MODE_BATCH_COUNT 1 // 数量阈值批处理
+#define BF_NOTIFY_MODE_BATCH_TIME 2  // 时间阈值批处理
+#define BF_NOTIFY_MODE_ADAPTIVE 3    // 自适应模式
+
+// 接收端处理模式
+#define BF_RX_MODE_INTERRUPT 0 // 中断模式
+#define BF_RX_MODE_POLLING 1   // 轮询模式
+
+// 批处理配置参数
+#define BF_BATCH_PKT_THRESHOLD 32      // 默认数据包阈值
+#define BF_BATCH_TIME_THRESHOLD_US 100 // 默认时间阈值(微秒)
+#define BF_POLLING_QUOTA 64            // 单次轮询最大处理包数
+#define BF_POLLING_TIMEOUT_US 1000     // 轮询超时(微秒)
+
+// 批处理统计信息
+struct bf_batch_stats {
+	atomic_t pending_pkts;           // 待通知的数据包数
+	unsigned long last_notify_time;  // 上次通知时间(jiffies)
+	atomic_t notify_count;           // 通知次数
+	atomic_t batch_notify_count;     // 批量通知次数
+	atomic_t immediate_notify_count; // 立即通知次数
+	unsigned long tx_bytes;          // 发送字节数
+	unsigned long tx_packets;        // 发送数据包数
+};
+
+// 接收端轮询信息
+struct bf_poll_info {
+	atomic_t polling;           // 是否处于轮询模式
+	atomic_t rx_packets;        // 接收数据包数
+	atomic_t rx_bytes;          // 接收字节数
+	unsigned long last_rx_time; // 上次接收时间
+	struct napi_struct napi;    // 类NAPI结构(可选)
+	int irq_enabled;            // 中断是否启用
+};
+
 /*
  * @brief FIFO 中传输的数据单元结构体
  * @note 请不要使用指针，因为数据是直接复制到 FIFO 中供另一个域读取的。
@@ -68,6 +105,20 @@ struct bf_handle {
 	xf_handle_t *in;      // 输入 FIFO (从远程域到本域)
 	uint32_t port;        // 本地域的事件通道端口
 	int irq;              // 绑定到事件通道的 IRQ
+
+	// 批处理相关
+	u8 tx_notify_mode;              // 发送通知模式
+	u8 rx_mode;                     // 接收模式
+	struct bf_batch_stats tx_stats; // 发送统计
+	struct bf_poll_info rx_poll;    // 接收轮询信息
+	struct timer_list batch_timer;  // 批处理定时器
+	spinlock_t tx_lock;             // 发送锁
+	spinlock_t rx_lock;             // 接收锁
+
+	// 自适应参数
+	unsigned int batch_pkt_threshold;  // 动态包阈值
+	unsigned int batch_time_threshold; // 动态时间阈值(us)
+	unsigned long adaptive_last_check; // 上次自适应检查时间
 };
 typedef struct bf_handle bf_handle_t;
 

@@ -534,6 +534,12 @@ void clean_suspended_entries(HashTable *ht) {
 		list_for_each_safe(x, y, &(table[i].bucket)) {
 			e = list_entry(x, Entry, mapping);
 			if (e->status == XENLOOP_STATUS_SUSPEND) {
+				// 先停止定时器
+				if (e->del_timer && timer_pending(&e->ack_timer)) {
+					del_timer_sync(&e->ack_timer);
+					e->del_timer = 0;
+				}
+
 				if (e->ip) {
 					// remove_entry_ip(ip_ht, e->ip);
 					remove_ip_mapping_safe(&ip_domid_map, e->ip, e);
