@@ -535,8 +535,11 @@ void clean_suspended_entries(HashTable *ht) {
 			e = list_entry(x, Entry, mapping);
 			if (e->status == XENLOOP_STATUS_SUSPEND) {
 				// 先停止定时器
-				if (e->del_timer && timer_pending(&e->ack_timer)) {
-					del_timer_sync(&e->ack_timer);
+				if (e->del_timer) {
+					if (timer_pending(&e->ack_timer)) {
+						DPRINTK("Stopping ACK timer for suspended entry\n");
+						del_timer_sync(&e->ack_timer);
+					}
 					e->del_timer = 0;
 				}
 

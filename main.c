@@ -86,7 +86,7 @@ extern int bf_notify_smart(bf_handle_t *bfh, unsigned int pkt_size);
 static domid_t my_domid;                  // 本地域（Domain）的ID
 static u8 my_macs[MAX_MAC_NUM][ETH_ALEN]; // 存储本地所有网络接口的MAC地址
 static u8 num_of_macs = 0;                // 本地MAC地址的数量
-static u8 freezed = 0;                    // 标志位，用于在迁移期间冻结模块活动
+u8 freezed = 0;                           // 标志位，用于在迁移期间冻结模块活动
 struct net_device *NIC = NULL;            // 用于发送会话管理消息的网络接口设备
 static int if_drops = 0;                  // 记录网络接口丢弃的数据包数量
 static skb_queue_t out_queue;    // 用于暂存待通过XenLoop发送的数据包队列
@@ -114,6 +114,27 @@ HashTable ip_domid_map;  // IP地址 -> Domain ID 映射表
 // 模块参数，用于指定XenLoop使用的物理网卡名称
 static char *nic = NULL;
 module_param(nic, charp, 0660);
+
+// 新增：批处理模式参数
+int tx_mode = BF_NOTIFY_MODE_IMMEDIATE; // 默认立即模式
+module_param(tx_mode, int, 0444);       // 只读，防止运行时修改
+MODULE_PARM_DESC(tx_mode, "TX notification mode: 0=immediate, 1=batch_count, "
+                          "2=batch_time, 3=adaptive");
+
+int rx_mode = BF_RX_MODE_INTERRUPT; // 默认中断模式
+module_param(rx_mode, int, 0444);   // 只读
+MODULE_PARM_DESC(rx_mode, "RX processing mode: 0=interrupt, 1=polling");
+
+// 批处理参数（可选）
+int batch_pkt_threshold = BF_BATCH_PKT_THRESHOLD;
+module_param(batch_pkt_threshold, int, 0444);
+MODULE_PARM_DESC(batch_pkt_threshold,
+                 "Packet count threshold for batching (default 32)");
+
+int batch_time_threshold = BF_BATCH_TIME_THRESHOLD_US;
+module_param(batch_time_threshold, int, 0444);
+MODULE_PARM_DESC(batch_time_threshold,
+                 "Time threshold in microseconds for batching (default 100)");
 
 /**
  * @brief 将XenLoop的状态写入XenStore。
@@ -1327,41 +1348,61 @@ static void xenloop_exit(void) {
 	write_xenstore(0); // 通知Dom0模块将要卸载
 	freezed = 1;
 
+	// 先停止 pending 线程，防止新数据包发送
+	if (pending_thread && !IS_ERR(pending_thread)) {
+		DPRINTK("Stopping pending thread...\n");
+		kthread_stop(pending_thread);
+		pending_thread = NULL;
+	}
+
+	// 清空待发送队列
+	DPRINTK("Cleaning pending queue (count=%d)...\n", out_queue.count);
+	clean_pending(&out_queue);
+
+	// 注销 netfilter hooks，防止新的数据包进入
+	DPRINTK("Unregistering netfilter hooks...\n");
+	nf_unregister_net_hook(&init_net, &iphook_in_ops);
+	nf_unregister_net_hook(&init_net, &iphook_out_ops);
+	nf_unregister_net_hook(&init_net, &hook_arp_ops);
+
+	// 等待一段时间让对方检测到状态变化
+	DPRINTK("Waiting for remote detection...\n");
+	msleep(500);
+
+	// 标记所有连接为挂起
+	DPRINTK("Marking all connections as suspended...\n");
+	mark_suspend(&mac_domid_map);
+
+	// 唤醒并停止 suspend 线程
 	if (suspend_thread && !IS_ERR(suspend_thread)) {
+		DPRINTK("Stopping suspend thread...\n");
+		wake_up_interruptible(&swq);
+		msleep(100); // 给线程一点时间处理
 		kthread_stop(suspend_thread);
 		suspend_thread = NULL;
 	}
 
-	// 停止内核线程
-	if (pending_thread)
-		kthread_stop(pending_thread);
-
-	// 等待一段时间让对方检测到状态变化
-	msleep(1000);
-
-	// mark everything as suspended
-	// 将所有连接标记为挂起
-	mark_suspend(&mac_domid_map);
-
-	if (suspend_thread)
-		kthread_stop(suspend_thread);
-
-	// 再等待一段时间确保清理完成
+	// 再等待确保所有定时器和回调完成
+	DPRINTK("Final wait for cleanup...\n");
 	msleep(500);
 
-	// 注销xenbus watch
+	// 注销 xenbus watch
+	DPRINTK("Unregistering xenbus watch...\n");
 	unregister_xenbus_watch(&suspend_resume_watch);
 
 	// 清理网络资源
-	net_exit();
+	DPRINTK("Cleaning network resources...\n");
+	dev_remove_pack(&xenloop_ptype);
+	if (NIC) {
+		dev_put(NIC);
+		NIC = NULL;
+	}
 
-	// NOTE: we don't clean the IP table since all of it's memory references
-	// Entries in the mac table
-	// 注意：我们不清理IP表，因为它所有的内存都引用了MAC表中的条目
-	// 清理哈希表
+	// 最后清理哈希表
+	DPRINTK("Cleaning hash tables...\n");
 	clean_table(&mac_domid_map);
 
-	DPRINTK("Exiting xenloop module.\n");
+	DPRINTK("Xenloop module cleanup complete.\n");
 	TRACE_EXIT;
 }
 

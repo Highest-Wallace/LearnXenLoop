@@ -55,6 +55,10 @@ extern HashTable mac_domid_map; // MAC地址到域ID的哈希映射表
 extern wait_queue_head_t swq;   // 等待队列，用于在特定条件下唤醒进程
 extern struct net_device *NIC;  // 网络接口控制器设备
 extern Entry *lookup_bfh(HashTable *, void *); // 在哈希表中查找条目的函数
+extern int tx_mode;
+extern int rx_mode;
+extern int batch_pkt_threshold;
+extern int batch_time_threshold;
 
 /**
  * @brief 向指定的事件通道端口发送一个通知。
@@ -276,6 +280,14 @@ int bf_notify_smart(bf_handle_t *bfh, unsigned int pkt_size) {
 		return 0;
 	}
 
+	// 安全检查：如果模块正在卸载，不要使用定时器
+	extern u8 freezed;
+	if (freezed) {
+		// 直接发送通知，不使用批处理
+		bf_notify(bfh->port);
+		return 1;
+	}
+
 	spin_lock_irqsave(&bfh->tx_lock, flags);
 
 	// 更新统计
@@ -314,8 +326,9 @@ int bf_notify_smart(bf_handle_t *bfh, unsigned int pkt_size) {
 
 	case BF_NOTIFY_MODE_ADAPTIVE:
 		// 自适应模式：结合数量和时间
-		// 小包使用更小的阈值，大包立即发送
-		if (pkt_size >= 1024) { // 大包立即发送
+		// 1. 大包 (>= 1024) 立即发送，提高吞吐量
+		// 2. 极小包 (< 128, 如 TCP ACKs) 立即发送，降低延迟
+		if (pkt_size >= 1024 || pkt_size < 128) {
 			should_notify = 1;
 		} else if (pending >= bfh->batch_pkt_threshold) {
 			should_notify = 1;
@@ -369,10 +382,13 @@ int bf_poll_rx(bf_handle_t *bfh, int quota) {
 	struct sk_buff *skb;
 	int work_done = 0;
 
+	// 设置一个较大的硬限制，防止死循环，但要远大于默认 quota 以清空积压
+	int hard_limit = 512;
+
 	TRACE_ENTRY;
 
 	// 处理FIFO中的数据包，但不超过quota
-	while (work_done < quota && !xf_empty(bfh->in)) {
+	while (work_done < hard_limit && !xf_empty(bfh->in)) {
 		skb = copy_packet(bfh->in);
 		if (!skb) {
 			break;
@@ -387,10 +403,14 @@ int bf_poll_rx(bf_handle_t *bfh, int quota) {
 		work_done++;
 	}
 
-	// 如果处理完所有包，清除轮询标志
-	if (xf_empty(bfh->in)) {
-		atomic_set(&bfh->rx_poll.polling, 0);
-	}
+	// 修复：无论是否处理完所有包，都必须清除轮询标志，
+	// 否则如果 FIFO 未空但达到 quota，标志位将卡在 1，导致后续中断被忽略。
+	atomic_set(&bfh->rx_poll.polling, 0);
+
+	// // 如果处理完所有包，清除轮询标志
+	// if (xf_empty(bfh->in)) {
+	// 	atomic_set(&bfh->rx_poll.polling, 0);
+	// }
 
 	TRACE_EXIT;
 	return work_done;
@@ -538,27 +558,43 @@ void bf_destroy(bf_handle_t *bfl) {
 		goto err;
 	}
 
-	// 先停止并删除定时器
-	if (timer_pending(&bfl->batch_timer)) {
-		del_timer_sync(&bfl->batch_timer);
+	// 1. 首先停止定时器（关键：必须在最开始）
+	// 使用 del_timer_sync 确保定时器回调完全停止
+	if (bfl->tx_notify_mode == BF_NOTIFY_MODE_BATCH_TIME ||
+	    bfl->tx_notify_mode == BF_NOTIFY_MODE_ADAPTIVE) {
+		// 先尝试删除定时器
+		if (timer_pending(&bfl->batch_timer)) {
+			DPRINTK("Stopping pending batch timer\n");
+			del_timer_sync(&bfl->batch_timer);
+		}
 	}
 
-	// 确保没有待处理的批量通知
+	// 2. 强制发送所有待处理的通知
 	if (atomic_read(&bfl->tx_stats.pending_pkts) > 0) {
+		DPRINTK("Flushing %d pending packets\n",
+		        atomic_read(&bfl->tx_stats.pending_pkts));
 		bf_notify(bfl->port);
 		atomic_set(&bfl->tx_stats.pending_pkts, 0);
 	}
 
-	// 释放事件通道
+	// 3. 等待一小段时间，确保远端处理完成
+	msleep(10);
+
+	// 4. 释放事件通道
 	free_evtch(bfl->port, bfl->irq, (void *)bfl);
 
-	// 销毁输入和输出 FIFO
-	if (bfl->in)
+	// 5. 销毁输入和输出 FIFO
+	if (bfl->in) {
 		xf_destroy(bfl->in);
+		bfl->in = NULL; // 防止重复释放
+	}
 
-	if (bfl->out)
+	if (bfl->out) {
 		xf_destroy(bfl->out);
+		bfl->out = NULL; // 防止重复释放
+	}
 
+	// 6. 最后释放句柄本身
 	kfree(bfl);
 
 	TRACE_EXIT;
@@ -589,11 +625,29 @@ bf_handle_t *bf_create(domid_t rdomid, int entry_order) {
 	memset(bfl, 0, sizeof(bf_handle_t));
 
 	// 初始化批处理相关字段 - 默认使用立即模式，避免初期问题
-	bfl->tx_notify_mode =
-	    BF_NOTIFY_MODE_IMMEDIATE;        // 先使用立即模式确保通信正常
-	bfl->rx_mode = BF_RX_MODE_INTERRUPT; // 先使用中断模式
-	bfl->batch_pkt_threshold = BF_BATCH_PKT_THRESHOLD;
-	bfl->batch_time_threshold = BF_BATCH_TIME_THRESHOLD_US;
+	bfl->tx_notify_mode = tx_mode;
+	bfl->rx_mode = rx_mode;
+	bfl->batch_pkt_threshold = batch_pkt_threshold;
+	bfl->batch_time_threshold = batch_time_threshold;
+
+	// 参数验证
+	if (bfl->tx_notify_mode < BF_NOTIFY_MODE_IMMEDIATE ||
+	    bfl->tx_notify_mode > BF_NOTIFY_MODE_ADAPTIVE) {
+		EPRINTK("Invalid tx_mode %d, using immediate mode\n", tx_mode);
+		bfl->tx_notify_mode = BF_NOTIFY_MODE_IMMEDIATE;
+	}
+
+	if (bfl->rx_mode < BF_RX_MODE_INTERRUPT ||
+	    bfl->rx_mode > BF_RX_MODE_POLLING) {
+		EPRINTK("Invalid rx_mode %d, using interrupt mode\n", rx_mode);
+		bfl->rx_mode = BF_RX_MODE_INTERRUPT;
+	}
+
+	// 输出当前配置（便于调试）
+	DPRINTK("Creating FIFO with tx_mode=%d, rx_mode=%d, pkt_thresh=%d, "
+	        "time_thresh=%d\n",
+	        bfl->tx_notify_mode, bfl->rx_mode, bfl->batch_pkt_threshold,
+	        bfl->batch_time_threshold);
 
 	spin_lock_init(&bfl->tx_lock);
 	spin_lock_init(&bfl->rx_lock);
@@ -610,8 +664,11 @@ bf_handle_t *bf_create(domid_t rdomid, int entry_order) {
 	atomic_set(&bfl->rx_poll.rx_bytes, 0);
 	bfl->rx_poll.irq_enabled = 1;
 
-	// 初始化批处理定时器
-	timer_setup(&bfl->batch_timer, bf_batch_timer_callback, 0);
+	// 只有在需要批处理时才初始化定时器
+	if (bfl->tx_notify_mode == BF_NOTIFY_MODE_BATCH_TIME ||
+	    bfl->tx_notify_mode == BF_NOTIFY_MODE_ADAPTIVE) {
+		timer_setup(&bfl->batch_timer, bf_batch_timer_callback, 0);
+	}
 
 	bfl->remote_domid = rdomid;
 	// 创建输出和输入 FIFO
@@ -702,27 +759,41 @@ void bf_disconnect(bf_handle_t *bfc) {
 		goto err;
 	}
 
-	// 先停止并删除定时器（如果连接端也初始化了定时器）
-	if (timer_pending(&bfc->batch_timer)) {
-		del_timer_sync(&bfc->batch_timer);
+	// 1. 停止定时器
+	if (bfc->tx_notify_mode == BF_NOTIFY_MODE_BATCH_TIME ||
+	    bfc->tx_notify_mode == BF_NOTIFY_MODE_ADAPTIVE) {
+		if (timer_pending(&bfc->batch_timer)) {
+			DPRINTK("Stopping pending batch timer (connect side)\n");
+			del_timer_sync(&bfc->batch_timer);
+		}
 	}
 
-	// 确保没有待处理的批量通知
+	// 2. 发送待处理的通知
 	if (atomic_read(&bfc->tx_stats.pending_pkts) > 0) {
+		DPRINTK("Flushing %d pending packets (connect side)\n",
+		        atomic_read(&bfc->tx_stats.pending_pkts));
 		bf_notify(bfc->port);
 		atomic_set(&bfc->tx_stats.pending_pkts, 0);
 	}
 
-	// 释放事件通道
+	// 3. 等待
+	msleep(10);
+
+	// 4. 释放事件通道
 	free_evtch(bfc->port, bfc->irq, (void *)bfc);
 
-	// 断开输入和输出 FIFO
-	if (bfc->in)
+	// 5. 断开输入和输出 FIFO
+	if (bfc->in) {
 		xf_disconnect(bfc->in);
+		bfc->in = NULL;
+	}
 
-	if (bfc->out)
+	if (bfc->out) {
 		xf_disconnect(bfc->out);
+		bfc->out = NULL;
+	}
 
+	// 6. 释放句柄
 	kfree(bfc);
 
 	TRACE_EXIT;
@@ -757,10 +828,26 @@ bf_handle_t *bf_connect(domid_t rdomid, int rgref_in, int rgref_out,
 	memset(bfc, 0, sizeof(bf_handle_t));
 
 	// 初始化批处理相关字段 - 连接端也需要初始化
-	bfc->tx_notify_mode = BF_NOTIFY_MODE_IMMEDIATE;
-	bfc->rx_mode = BF_RX_MODE_INTERRUPT;
-	bfc->batch_pkt_threshold = BF_BATCH_PKT_THRESHOLD;
-	bfc->batch_time_threshold = BF_BATCH_TIME_THRESHOLD_US;
+	bfc->tx_notify_mode = tx_mode;
+	bfc->rx_mode = rx_mode;
+	bfc->batch_pkt_threshold = batch_pkt_threshold;
+	bfc->batch_time_threshold = batch_time_threshold;
+
+	// 参数验证
+	if (bfc->tx_notify_mode < BF_NOTIFY_MODE_IMMEDIATE ||
+	    bfc->tx_notify_mode > BF_NOTIFY_MODE_ADAPTIVE) {
+		EPRINTK("Invalid tx_mode %d, using immediate mode\n", tx_mode);
+		bfc->tx_notify_mode = BF_NOTIFY_MODE_IMMEDIATE;
+	}
+
+	if (bfc->rx_mode < BF_RX_MODE_INTERRUPT ||
+	    bfc->rx_mode > BF_RX_MODE_POLLING) {
+		EPRINTK("Invalid rx_mode %d, using interrupt mode\n", rx_mode);
+		bfc->rx_mode = BF_RX_MODE_INTERRUPT;
+	}
+
+	DPRINTK("Connecting FIFO with tx_mode=%d, rx_mode=%d\n",
+	        bfc->tx_notify_mode, bfc->rx_mode);
 
 	spin_lock_init(&bfc->tx_lock);
 	spin_lock_init(&bfc->rx_lock);
@@ -776,7 +863,11 @@ bf_handle_t *bf_connect(domid_t rdomid, int rgref_in, int rgref_out,
 	atomic_set(&bfc->rx_poll.rx_bytes, 0);
 	bfc->rx_poll.irq_enabled = 1;
 
-	timer_setup(&bfc->batch_timer, bf_batch_timer_callback, 0);
+	// 只有在需要批处理时才初始化定时器
+	if (bfc->tx_notify_mode == BF_NOTIFY_MODE_BATCH_TIME ||
+	    bfc->tx_notify_mode == BF_NOTIFY_MODE_ADAPTIVE) {
+		timer_setup(&bfc->batch_timer, bf_batch_timer_callback, 0);
+	}
 
 	bfc->remote_domid = rdomid;
 	// 连接到远程的 FIFO
