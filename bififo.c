@@ -60,6 +60,13 @@ extern int rx_mode;
 extern int batch_pkt_threshold;
 extern int batch_time_threshold;
 
+void bf_wakeup_tasklet_func(struct tasklet_struct *t);
+DECLARE_TASKLET(bf_wakeup_tasklet, bf_wakeup_tasklet_func);
+
+void bf_wakeup_tasklet_func(struct tasklet_struct *t) {
+	wake_up_interruptible(&swq);
+}
+
 /**
  * @brief 向指定的事件通道端口发送一个通知。
  * @param port 目标事件通道端口。
@@ -204,13 +211,13 @@ out:
  * @param bfh 指向双向 FIFO 句柄的指针。
  */
 void recv_packets(bf_handle_t *bfh) {
-	// static DEFINE_SPINLOCK(recv_lock);
+	static DEFINE_SPINLOCK(recv_lock);
 	struct sk_buff *skb;
-	// unsigned long flags;
+	unsigned long flags;
 
 	TRACE_ENTRY;
 
-	// spin_lock_irqsave(&recv_lock, flags);
+	spin_lock_irqsave(&recv_lock, flags);
 
 	// 循环直到输入 FIFO 为空
 	while (!xf_empty(bfh->in)) {
@@ -219,7 +226,7 @@ void recv_packets(bf_handle_t *bfh) {
 		if (!skb)
 			break;
 
-		// spin_unlock_irqrestore(&recv_lock, flags);
+		spin_unlock_irqrestore(&recv_lock, flags);
 
 		// DPRINTK("packet received through xenloop\n");
 		// 将接收到的包交给网络协议栈处理
@@ -229,10 +236,10 @@ void recv_packets(bf_handle_t *bfh) {
 		//       但可惜这些符号没有导出到内核模块中。
 		// ip_local_deliver(skb);
 
-		// spin_lock_irqsave(&recv_lock, flags);
+		spin_lock_irqsave(&recv_lock, flags);
 	}
 
-	// spin_unlock_irqrestore(&recv_lock, flags);
+	spin_unlock_irqrestore(&recv_lock, flags);
 
 	TRACE_EXIT;
 }
@@ -438,7 +445,10 @@ irqreturn_t bf_callback(int rq, void *dev_id) {
 		// 设置状态为挂起并唤醒等待队列
 		e->status = XENLOOP_STATUS_SUSPEND;
 
-		wake_up_interruptible(&swq);
+		// wake_up_interruptible(&swq);
+		// 使用 tasklet 在安全上下文中唤醒线程
+		tasklet_schedule(&bf_wakeup_tasklet);
+
 		TRACE_EXIT;
 		return IRQ_HANDLED;
 	}
