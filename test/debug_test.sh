@@ -29,13 +29,13 @@ echo "=== Testing Connectivity ==="
 
 # 设置测试目标
 if [ "$(hostname)" = "dom1" ]; then
-    TARGET_IP="10.12.134.101"  # dom2
+    TARGET_IP="10.75.85.35"  # dom2
     echo "Testing connection from dom1 to dom2 ($TARGET_IP)"
 elif [ "$(hostname)" = "dom2" ]; then
-    TARGET_IP="10.12.134.100"  # dom1 (假设是这个IP)
+    TARGET_IP="10.75.85.53"  # dom1 (假设是这个IP)
     echo "Testing connection from dom2 to dom1 ($TARGET_IP)"
 else
-    TARGET_IP="10.12.134.100"
+    TARGET_IP="10.75.85.53"
     echo "Unknown host, testing to $TARGET_IP"
 fi
 
