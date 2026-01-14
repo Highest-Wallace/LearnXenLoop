@@ -26,6 +26,6 @@ clean:
 .PHONY: modules modules_install clean
 
 else
-	xenloop-objs :=  xenfifo.o maptable.o bififo.o main.o
-	obj-m :=  discovery.o xenloop.o
+	xenlcnh-objs :=  xenfifo.o maptable.o bififo.o main.o
+	obj-m :=  manager.o xenlcnh.o
 endif
