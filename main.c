@@ -89,12 +89,12 @@ static u8 num_of_macs = 0;                // 本地MAC地址的数量
 u8 freezed = 0;                           // 标志位，用于在迁移期间冻结模块活动
 struct net_device *NIC = NULL;            // 用于发送会话管理消息的网络接口设备
 static int if_drops = 0;                  // 记录网络接口丢弃的数据包数量
-static skb_queue_t out_queue;    // 用于暂存待通过XenLoop发送的数据包队列
+static skb_queue_t out_queue;    // 用于暂存待通过XenLCNH发送的数据包队列
 static skb_queue_t pending_free; // 待释放的skb队列 (当前代码中未使用)
 
 // 静态函数声明
-static int xenloop_connect(message_t *msg, Entry *e);
-static int xenloop_listen(Entry *e);
+static int xenlcnh_connect(message_t *msg, Entry *e);
+static int xenlcnh_listen(Entry *e);
 static struct task_struct *suspend_thread = NULL; // 用于处理挂起连接的内核线程
 DECLARE_WAIT_QUEUE_HEAD(swq);                     // suspend_thread的等待队列
 EXPORT_SYMBOL(swq);
@@ -112,7 +112,7 @@ extern int init_hash_table_ip(HashTable *ht);
 HashTable mac_domid_map; // MAC地址 -> Domain ID 映射表
 HashTable ip_domid_map;  // IP地址 -> Domain ID 映射表
 
-// 模块参数，用于指定XenLoop使用的物理网卡名称
+// 模块参数，用于指定XenLCNH使用的物理网卡名称
 static char *nic = NULL;
 module_param(nic, charp, 0660);
 
@@ -138,7 +138,7 @@ MODULE_PARM_DESC(batch_time_threshold,
                  "Time threshold in microseconds for batching (default 100)");
 
 /**
- * @brief 将XenLoop的状态写入XenStore。
+ * @brief 将XenLCNH的状态写入XenStore。
  *
  * @param status 要写入的状态值 (1: 运行中, 0: 已停止/挂起)。
  * @return 成功返回0，失败返回错误码。
@@ -146,9 +146,9 @@ MODULE_PARM_DESC(batch_time_threshold,
 static int write_xenstore(int status) {
 	int err = 1;
 
-	err = xenbus_printf(XBT_NIL, "xenloop", "xenloop", "%d", status);
+	err = xenbus_printf(XBT_NIL, "xenlcnh", "xenlcnh", "%d", status);
 	if (err) {
-		EPRINTK("writing xenstore xenloop status failed, err = %d \n", err);
+		EPRINTK("writing xenstore xenlcnh status failed, err = %d \n", err);
 	}
 	return err;
 }
@@ -245,7 +245,7 @@ out:
 /**
  * @brief 根据收到的会话发现消息更新MAC-DomID映射表。
  *
- * 当收到一个XENLOOP_MSG_TYPE_SESSION_DISCOVER类型的消息时，
+ * 当收到一个XENLCNH_MSG_TYPE_SESSION_DISCOVER类型的消息时，
  * 此函数会检查消息中包含的MAC地址列表。如果某个MAC地址不在本地
  * 的映射表中，则将其和对应的Domain ID添加到表中。
  *
@@ -332,31 +332,31 @@ int session_recv(struct sk_buff *skb, net_device *dev, packet_type *pt,
 	skb_linearize(skb);
 
 	switch (msg->type) {
-	case XENLOOP_MSG_TYPE_SESSION_DISCOVER:
+	case XENLCNH_MSG_TYPE_SESSION_DISCOVER:
 		// 如果模块未被冻结，则更新会话信息
 		if (!freezed)
 			session_update(msg);
 		break;
-	case XENLOOP_MSG_TYPE_CREATE_CHN:
+	case XENLCNH_MSG_TYPE_CREATE_CHN:
 		// 处理创建通道的请求
 		e = pre_check_msg(msg);
 		if (!e)
 			goto out;
 
-		ret = xenloop_connect(msg, e);
+		ret = xenlcnh_connect(msg, e);
 		break;
-	case XENLOOP_MSG_TYPE_CREATE_ACK:
+	case XENLCNH_MSG_TYPE_CREATE_ACK:
 		// 处理创建通道的确认消息
 		e = pre_check_msg(msg);
 		if (!e)
 			goto out;
 
 		// 更新状态为已连接，并删除ACK超时定时器
-		e->status = XENLOOP_STATUS_CONNECTED;
+		e->status = XENLCNH_STATUS_CONNECTED;
 		if (e->del_timer) {
 			del_timer(&e->ack_timer);
 		}
-		DPRINTK("LISTENER status changed to XENLOOP_STATUS_CONNECTED!!!\n");
+		DPRINTK("LISTENER status changed to XENLCNH_STATUS_CONNECTED!!!\n");
 		break;
 	default:
 		EPRINTK("session_recv(): unknown msg type %d\n", msg->type);
@@ -369,7 +369,7 @@ out:
 }
 
 // 定义一个packet_type结构，用于接收特定以太网类型（ETH_P_TIDC）的数据包
-static packet_type xenloop_ptype = {
+static packet_type xenlcnh_ptype = {
     .type = __constant_htons(ETH_P_TIDC), // 协议类型
     .func = session_recv,                 // 处理函数
     .dev = NULL,                          // 监听所有设备
@@ -442,7 +442,7 @@ void send_create_chn_msg(int gref_in, int gref_out, int remote_port,
 
 	// 填充消息内容
 	memset(m, 0, MSGSIZE);
-	m->type = XENLOOP_MSG_TYPE_CREATE_CHN;
+	m->type = XENLCNH_MSG_TYPE_CREATE_CHN;
 	m->domid = my_domid;
 	m->mac_count = num_of_macs;
 	memcpy(m->mac, my_macs, num_of_macs * ETH_ALEN);
@@ -473,7 +473,7 @@ void send_create_ack_msg(u8 *dest_mac) {
 
 	// 填充消息内容
 	memset(m, 0, MSGSIZE);
-	m->type = XENLOOP_MSG_TYPE_CREATE_ACK;
+	m->type = XENLCNH_MSG_TYPE_CREATE_ACK;
 	m->domid = my_domid;
 	m->mac_count = num_of_macs;
 	memcpy(m->mac, my_macs, num_of_macs * ETH_ALEN);
@@ -500,10 +500,10 @@ static void ack_timeout(struct timer_list *tm) {
 	BUG_ON(!e->listen_flag);
 
 	// 如果已经连接，则直接返回
-	if (e->status == XENLOOP_STATUS_CONNECTED)
+	if (e->status == XENLCNH_STATUS_CONNECTED)
 		return;
 
-	BUG_ON(e->status != XENLOOP_STATUS_LISTEN);
+	BUG_ON(e->status != XENLCNH_STATUS_LISTEN);
 
 	bfl = e->bfh;
 	BUG_ON(!bfl);
@@ -514,13 +514,13 @@ static void ack_timeout(struct timer_list *tm) {
 		send_create_chn_msg(BF_GREF_IN(bfl), BF_GREF_OUT(bfl), BF_EVT_PORT(bfl),
 		                    e->mac);
 		e->retry_count++;
-		mod_timer(&e->ack_timer, jiffies + XENLOOP_ACK_TIMEOUT * HZ);
+		mod_timer(&e->ack_timer, jiffies + XENLCNH_ACK_TIMEOUT * HZ);
 	} else { // 如果超过重试次数，则将通道标记为挂起状态，并唤醒挂起处理线程
 		if (check_descriptor(e->bfh)) {
 			BF_SUSPEND_IN(e->bfh) = 1;
 			BF_SUSPEND_OUT(e->bfh) = 1;
 		}
-		e->status = XENLOOP_STATUS_SUSPEND;
+		e->status = XENLCNH_STATUS_SUSPEND;
 		wake_up_interruptible(&swq);
 	}
 
@@ -533,7 +533,7 @@ static void ack_timeout(struct timer_list *tm) {
  * @param e 指向对应连接的Entry。
  * @return 成功返回0，失败返回-1。
  */
-static int xenloop_listen(Entry *e) {
+static int xenlcnh_listen(Entry *e) {
 	static DEFINE_SPINLOCK(listen_lock);
 	unsigned long flag;
 	domid_t remote_domid = e->domid;
@@ -547,21 +547,21 @@ static int xenloop_listen(Entry *e) {
 	spin_lock_irqsave(&listen_lock, flag);
 
 	// 如果状态不是初始状态，说明已经有其他线程在处理，直接返回
-	if (e->status != XENLOOP_STATUS_INIT) {
+	if (e->status != XENLCNH_STATUS_INIT) {
 		spin_unlock_irqrestore(&listen_lock, flag);
 		TRACE_EXIT;
 		return 0;
 	}
 
 	// 设置状态为监听中
-	e->status = XENLOOP_STATUS_LISTEN;
+	e->status = XENLCNH_STATUS_LISTEN;
 
 	spin_unlock_irqrestore(&listen_lock, flag);
 
 	// 创建双向FIFO
-	bfl = bf_create(remote_domid, XENLOOP_ENTRY_ORDER);
+	bfl = bf_create(remote_domid, XENLCNH_ENTRY_ORDER);
 	if (!bfl) {
-		e->status = XENLOOP_STATUS_INIT;
+		e->status = XENLCNH_STATUS_INIT;
 
 		EPRINTK("bf_create failed\n");
 		TRACE_ERROR;
@@ -589,7 +589,7 @@ static int xenloop_listen(Entry *e) {
 	// 启动ACK超时定时器
 	timer_setup(&e->ack_timer, ack_timeout, 0);
 	e->del_timer = 1;
-	e->ack_timer.expires = jiffies + XENLOOP_ACK_TIMEOUT * HZ;
+	e->ack_timer.expires = jiffies + XENLCNH_ACK_TIMEOUT * HZ;
 	add_timer(&e->ack_timer);
 
 	TRACE_EXIT;
@@ -603,7 +603,7 @@ static int xenloop_listen(Entry *e) {
  * @param e 指向对应连接的Entry。
  * @return 成功返回0，失败返回-1。
  */
-static int xenloop_connect(message_t *msg, Entry *e) {
+static int xenlcnh_connect(message_t *msg, Entry *e) {
 	domid_t remote_domid = e->domid;
 	bf_handle_t *bfc = NULL;
 
@@ -612,7 +612,7 @@ static int xenloop_connect(message_t *msg, Entry *e) {
 	BUG_ON(!msg);
 
 	// 如果已经连接，则只需回复ACK
-	if (e->status == XENLOOP_STATUS_CONNECTED) {
+	if (e->status == XENLCNH_STATUS_CONNECTED) {
 		send_create_ack_msg(e->mac);
 		TRACE_EXIT;
 		return 0;
@@ -641,8 +641,8 @@ static int xenloop_connect(message_t *msg, Entry *e) {
 	e->resource_owner = 0; // 标记为不拥有资源
 	e->bfh = bfc;
 
-	e->status = XENLOOP_STATUS_CONNECTED;
-	DPRINTK("CONNECTOR status changed to XENLOOP_STATUS_CONNECTED!!!\n");
+	e->status = XENLCNH_STATUS_CONNECTED;
+	DPRINTK("CONNECTOR status changed to XENLCNH_STATUS_CONNECTED!!!\n");
 
 	// 发送ACK确认连接成功
 	send_create_ack_msg(e->mac);
@@ -655,7 +655,7 @@ err:
 }
 
 /**
- * @brief 通过XenLoop的FIFO发送一个大数据包（可能跨越多个FIFO条目）。
+ * @brief 通过XenLCNH的FIFO发送一个大数据包（可能跨越多个FIFO条目）。
  *
  * @param skb 要发送的数据包。
  * @param xfh 要使用的单向FIFO句柄。
@@ -796,7 +796,7 @@ void clean_pending(skb_queue_t *Q) {
 // 有时会传递NULL以清空队列
 // 如果xmit_large_pkt返回错误，队列将会填满
 /**
- * @brief 从out_queue中取出数据包并通过XenLoop发送。
+ * @brief 从out_queue中取出数据包并通过XenLCNH发送。
  *
  * @param skb 要发送的新数据包（可以为NULL，表示只处理队列中已有的包）。
  * @return 成功返回0，失败返回-1。
@@ -819,7 +819,7 @@ inline int xmit_packets(struct sk_buff *skb) {
 	if (skb) {
 		// 检查数据包大小是否超过FIFO容量
 		if (skb->len + sizeof(bf_data_t) <
-		    (1 << XENLOOP_ENTRY_ORDER) * sizeof(bf_data_t))
+		    (1 << XENLCNH_ENTRY_ORDER) * sizeof(bf_data_t))
 			enqueue(&out_queue, skb);
 		else {
 			DB("Packet size greater than total fifo size\n");
@@ -950,33 +950,33 @@ static unsigned int iphook_out(void *priv, struct sk_buff *skb,
 	// 检查连接是否被挂起
 	if (check_descriptor(e->bfh) &&
 	    (BF_SUSPEND_IN(e->bfh) || BF_SUSPEND_OUT(e->bfh))) {
-		e->status = XENLOOP_STATUS_SUSPEND;
+		e->status = XENLCNH_STATUS_SUSPEND;
 		wake_up_interruptible(&swq);
 		return NF_ACCEPT;
 	}
 
 	switch (e->status) {
-	case XENLOOP_STATUS_INIT:
+	case XENLCNH_STATUS_INIT:
 		// 如果是初始状态，且本地域ID较小，则发起连接
 		if (my_domid < e->domid) {
-			xenloop_listen(e);
+			xenlcnh_listen(e);
 		}
 
 		TRACE_EXIT;
 		return NF_ACCEPT; // 初始连接时，让第一个包正常发出
 
-	case XENLOOP_STATUS_CONNECTED:
-		// 如果已连接，则通过XenLoop发送
+	case XENLCNH_STATUS_CONNECTED:
+		// 如果已连接，则通过XenLCNH发送
 		if (xmit_packets(skb) < 0) {
 			EPRINTK("Couldn't send packet via bififo. Using network instead\n");
 			ret = NF_ACCEPT; // 发送失败，则退回正常网络路径
 			goto out;
 		}
-		// DPRINTK("packet transmitted through Xenloop\n");
+		// DPRINTK("packet transmitted through XenLCNH\n");
 		ret = NF_STOLEN; // 发送成功，数据包被"窃取"，不再经过网络栈
 		break;
 
-	case XENLOOP_STATUS_LISTEN:
+	case XENLCNH_STATUS_LISTEN:
 	default:
 		TRACE_EXIT;
 		return ret;
@@ -1007,8 +1007,8 @@ static unsigned int iphook_in(void *priv, struct sk_buff *skb,
 
 	// 如果是初始状态且本地域ID较小，发起连接
 	// 这是为了处理对端先发起通信的情况
-	if ((e->status == XENLOOP_STATUS_INIT) && (my_domid < e->domid))
-		xenloop_listen(e);
+	if ((e->status == XENLCNH_STATUS_INIT) && (my_domid < e->domid))
+		xenlcnh_listen(e);
 
 	TRACE_EXIT;
 
@@ -1135,7 +1135,7 @@ int net_init(void) {
 	}
 
 	// 注册用于接收会话管理消息的packet_type
-	dev_add_pack(&xenloop_ptype);
+	dev_add_pack(&xenlcnh_ptype);
 
 out:
 	TRACE_EXIT;
@@ -1148,7 +1148,7 @@ out:
 void net_exit(void) {
 	TRACE_ENTRY;
 
-	dev_remove_pack(&xenloop_ptype);
+	dev_remove_pack(&xenlcnh_ptype);
 
 	// 注销Netfilter钩子
 	nf_unregister_net_hook(&init_net, &iphook_in_ops);
@@ -1342,7 +1342,7 @@ static struct xenbus_watch suspend_resume_watch = {
 /**
  * @brief 模块退出函数。
  */
-static void xenloop_exit(void) {
+static void xenlcnh_exit(void) {
 
 	TRACE_ENTRY;
 
@@ -1393,7 +1393,7 @@ static void xenloop_exit(void) {
 
 	// 清理网络资源
 	DPRINTK("Cleaning network resources...\n");
-	dev_remove_pack(&xenloop_ptype);
+	dev_remove_pack(&xenlcnh_ptype);
 	if (NIC) {
 		dev_put(NIC);
 		NIC = NULL;
@@ -1403,7 +1403,7 @@ static void xenloop_exit(void) {
 	DPRINTK("Cleaning hash tables...\n");
 	clean_table(&mac_domid_map);
 
-	DPRINTK("Xenloop module cleanup complete.\n");
+	DPRINTK("XenLCNH module cleanup complete.\n");
 	TRACE_EXIT;
 }
 
@@ -1412,7 +1412,7 @@ static void xenloop_exit(void) {
  *
  * @return 成功返回0，失败返回错误码。
  */
-static int __init xenloop_init(void) {
+static int __init xenlcnh_init(void) {
 	int rc = 0;
 
 	// 检查是否传入了必要的nic参数
@@ -1482,26 +1482,26 @@ static int __init xenloop_init(void) {
 	// 创建并运行内核线程
 	pending_thread = kthread_run(xmit_pending, NULL, "pending");
 	if (!pending_thread) {
-		xenloop_exit();
+		xenlcnh_exit();
 		rc = -1;
 		goto out;
 	}
 
 	suspend_thread = kthread_run(check_suspend, NULL, "suspend");
 	if (!suspend_thread) {
-		xenloop_exit();
+		xenlcnh_exit();
 		rc = -1;
 		goto out;
 	}
 
-	DPRINTK("XENLOOP successfully initialized!\n");
+	DPRINTK("XENLCNH successfully initialized!\n");
 
 out:
 	TRACE_EXIT;
 	return rc;
 }
 
-module_init(xenloop_init);
-module_exit(xenloop_exit);
+module_init(xenlcnh_init);
+module_exit(xenlcnh_exit);
 
 MODULE_LICENSE("GPL");

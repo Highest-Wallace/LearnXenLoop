@@ -31,13 +31,13 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef _DISCOVERY_H_
-#define _DISCOVERY_H_
+#ifndef _MANAGER_H_
+#define _MANAGER_H_
 
 #define DISCOVER_TIMEOUT 1
 
 typedef struct ethhdr ethhdr;
-#define XENLOOP_MSG_TYPE_SESSION_DISCOVER 77
+#define XENLCNH_MSG_TYPE_SESSION_DISCOVER 77
 
 #define ETH_P_TIDC 0x8888
 
@@ -63,4 +63,4 @@ typedef struct message {
 #define MSGSIZE sizeof(message_t)
 const int headers = LINK_HDR + MSGSIZE;
 
-#endif /* _DISCOVERY_H_ */
+#endif /* _MANAGER_H_ */

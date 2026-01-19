@@ -43,7 +43,7 @@ extern HashTable ip_domid_map; // 引用全局 IP 哈希表
 static DEFINE_SPINLOCK(glock);
 
 ulong hash(u8 *pmac) {
-	return (pmac[3] + pmac[4] + pmac[5]) % XENLOOP_HASH_SIZE;
+	return (pmac[3] + pmac[4] + pmac[5]) % XENLCNH_HASH_SIZE;
 }
 
 int equal(void *pmac1, void *pmac2) {
@@ -54,7 +54,7 @@ int equal(void *pmac1, void *pmac2) {
 };
 
 // hash an IPv4 address
-ulong hash_ip(u32 ip) { return ip % XENLOOP_HASH_SIZE; }
+ulong hash_ip(u32 ip) { return ip % XENLCNH_HASH_SIZE; }
 
 // check if two IPv4 address are equal
 // returns 1 if equal, 0 otherwise
@@ -73,7 +73,7 @@ inline void insert_table(HashTable *ht, void *key, u8 domid) {
 	e->domid = domid;
 	e->timestamp = jiffies;
 	e->del_timer = 0;
-	e->status = XENLOOP_STATUS_INIT;
+	e->status = XENLCNH_STATUS_INIT;
 	e->listen_flag = 0xff;
 	e->bfh = NULL;
 	e->retry_count = 0;
@@ -120,7 +120,7 @@ inline void remove_entry(HashTable *ht, Entry *e, struct list_head *x) {
 
 	// change status first, so suspend doesn't call this while we're
 	// disconnecting
-	e->status = XENLOOP_STATUS_INIT;
+	e->status = XENLCNH_STATUS_INIT;
 	if (e->bfh) {
 		if (e->resource_owner) {
 			if (e->listen_flag) {
@@ -231,7 +231,7 @@ inline Entry *lookup_bfh(HashTable *ht, void *key) {
 	struct list_head *x, *y;
 	Entry *e;
 
-	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLCNH_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(ht->table[i].bucket)) {
 			e = list_entry(x, Entry, mapping);
 			if (key == e->bfh) {
@@ -287,10 +287,10 @@ inline int has_suspend_entry(HashTable *ht) {
 	struct list_head *x, *y;
 	Bucket *table = ht->table;
 
-	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLCNH_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(table[i].bucket)) {
 			e = list_entry(x, Entry, mapping);
-			if (e->status == XENLOOP_STATUS_SUSPEND)
+			if (e->status == XENLCNH_STATUS_SUSPEND)
 				return 1;
 		}
 	}
@@ -304,7 +304,7 @@ inline void mark_suspend(HashTable *ht) {
 	struct list_head *x, *y;
 	Bucket *table = ht->table;
 	TRACE_ENTRY;
-	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLCNH_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(table[i].bucket)) {
 			e = list_entry(x, Entry, mapping);
 			if (check_descriptor(e->bfh)) {
@@ -312,7 +312,7 @@ inline void mark_suspend(HashTable *ht) {
 				BF_SUSPEND_OUT(e->bfh) = 1;
 				bf_notify(e->bfh->port);
 			}
-			e->status = XENLOOP_STATUS_SUSPEND;
+			e->status = XENLCNH_STATUS_SUSPEND;
 		}
 	}
 	TRACE_EXIT;
@@ -328,7 +328,7 @@ void notify_all_bfs(HashTable *ht) {
 
 	TRACE_ENTRY;
 
-	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLCNH_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(table[i].bucket)) {
 			e = list_entry(x, Entry, ip_mapping);
 			if (check_descriptor(e->bfh) && (xf_size(e->bfh->out) > 0))
@@ -345,11 +345,11 @@ inline int has_active_connections(HashTable *ht) {
 	struct list_head *x, *y;
 	Bucket *table = ht->table;
 
-	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLCNH_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(table[i].bucket)) {
 			e = list_entry(x, Entry, mapping);
-			if (e->status == XENLOOP_STATUS_CONNECTED ||
-			    e->status == XENLOOP_STATUS_LISTEN) {
+			if (e->status == XENLCNH_STATUS_CONNECTED ||
+			    e->status == XENLCNH_STATUS_LISTEN) {
 				return 1;
 			}
 		}
@@ -367,12 +367,12 @@ inline void check_timeout(HashTable *ht) {
 	static int consecutive_timeouts = 0; // 连续超时计数
 	int active_connections = 0;
 
-	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLCNH_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(table[i].bucket)) {
 			e = list_entry(x, Entry, mapping);
 
-			if (e->status == XENLOOP_STATUS_CONNECTED ||
-			    e->status == XENLOOP_STATUS_LISTEN) {
+			if (e->status == XENLCNH_STATUS_CONNECTED ||
+			    e->status == XENLCNH_STATUS_LISTEN) {
 				active_connections++;
 			}
 		}
@@ -388,12 +388,12 @@ inline void check_timeout(HashTable *ht) {
 		return; // 直接返回，不检查超时
 	}
 
-	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLCNH_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(table[i].bucket)) {
 			e = list_entry(x, Entry, mapping);
 
-			if (e->status != XENLOOP_STATUS_CONNECTED &&
-			    e->status != XENLOOP_STATUS_LISTEN) {
+			if (e->status != XENLCNH_STATUS_CONNECTED &&
+			    e->status != XENLCNH_STATUS_LISTEN) {
 				continue;
 			}
 
@@ -432,7 +432,7 @@ inline void check_timeout(HashTable *ht) {
 
 					DPRINTK("marking entry as suspended for domid %d\n",
 					        e->domid);
-					e->status = XENLOOP_STATUS_SUSPEND;
+					e->status = XENLCNH_STATUS_SUSPEND;
 					found = 1;
 				}
 			}
@@ -455,7 +455,7 @@ inline void update_table(HashTable *ht, u8 *mac, int mac_count) {
 	struct list_head *x, *y;
 	Bucket *table = ht->table;
 
-	for (j = 0; j < XENLOOP_HASH_SIZE; j++) {
+	for (j = 0; j < XENLCNH_HASH_SIZE; j++) {
 		list_for_each_safe(x, y, &(table[j].bucket)) {
 			e = list_entry(x, Entry, mapping);
 			for (i = 0, p = mac; i < mac_count; i++, p += ETH_ALEN) {
@@ -474,7 +474,7 @@ inline void update_table(HashTable *ht, u8 *mac, int mac_count) {
 				BF_SUSPEND_IN(e->bfh) = 1;
 				BF_SUSPEND_OUT(e->bfh) = 1;
 			}
-			e->status = XENLOOP_STATUS_SUSPEND;
+			e->status = XENLCNH_STATUS_SUSPEND;
 			found = 0;
 			wake_up_interruptible(&swq);
 		}
@@ -494,7 +494,7 @@ int init_hash_table(HashTable *ht, char *name) {
 		return -ENOMEM;
 	}
 
-	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLCNH_HASH_SIZE; i++) {
 		INIT_LIST_HEAD(&(ht->table[i].bucket));
 	}
 
@@ -509,7 +509,7 @@ int init_hash_table_ip(HashTable *ht) {
 	ht->count = 0;
 	ht->entries = NULL;
 
-	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLCNH_HASH_SIZE; i++) {
 		INIT_LIST_HEAD(&(ht->table[i].bucket));
 	}
 
@@ -530,10 +530,10 @@ void clean_suspended_entries(HashTable *ht) {
 
 	spin_lock_irqsave(&cleanup_lock, flags);
 
-	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLCNH_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(table[i].bucket)) {
 			e = list_entry(x, Entry, mapping);
-			if (e->status == XENLOOP_STATUS_SUSPEND) {
+			if (e->status == XENLCNH_STATUS_SUSPEND) {
 				// 先停止定时器
 				if (e->del_timer) {
 					if (timer_pending(&e->ack_timer)) {
@@ -589,7 +589,7 @@ void clean_suspended_entries(HashTable *ht) {
 						bf_disconnect(e->bfh);
 						e->bfh = NULL;
 					}
-					e->status = XENLOOP_STATUS_INIT; // 重置状态，等待重连
+					e->status = XENLCNH_STATUS_INIT; // 重置状态，等待重连
 				}
 			}
 		}
@@ -612,7 +612,7 @@ void clean_table(HashTable *ht) {
 
 	DPRINTK("clean table\n");
 
-	for (i = 0; i < XENLOOP_HASH_SIZE; i++) {
+	for (i = 0; i < XENLCNH_HASH_SIZE; i++) {
 		list_for_each_safe(x, y, &(table[i].bucket)) {
 			e = list_entry(x, Entry, mapping);
 			remove_entry(ht, e, x);

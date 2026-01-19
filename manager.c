@@ -48,7 +48,7 @@
 #include <linux/skbuff.h>
 
 #include "debug.h"
-#include "discovery.h"
+#include "manager.h"
 
 static u8 guest_macs[MAX_MAC_NUM][ETH_ALEN];
 static int num_of_macs = 0;
@@ -141,7 +141,7 @@ out:
 static int probe_domains(void) {
 	int ret, err = 0, status;
 	char **dir;
-	char *path = NULL, *xenloop = NULL;
+	char *path = NULL, *xenlcnh = NULL;
 	unsigned int i, dir_n;
 
 	TRACE_ENTRY;
@@ -158,22 +158,22 @@ static int probe_domains(void) {
 			goto out;
 		}
 
-		xenloop = kasprintf(GFP_KERNEL, "%s/xenloop", path);
-		if (!xenloop) {
-			EPRINTK("kasprintf for xenloop failed.\n");
+		xenlcnh = kasprintf(GFP_KERNEL, "%s/xenlcnh", path);
+		if (!xenlcnh) {
+			EPRINTK("kasprintf for xenlcnh failed.\n");
 			err = -ENOMEM;
 			kfree(path);
 			goto out;
 		}
 
-		ret = xenbus_scanf(XBT_NIL, xenloop, "xenloop", "%d", &status);
+		ret = xenbus_scanf(XBT_NIL, xenlcnh, "xenlcnh", "%d", &status);
 		if (ret != 1) {
-			DB("reading xenstore xenloop status failed, err = %d domainid = "
+			DB("reading xenstore xenlcnh status failed, err = %d domainid = "
 			   "%s\n",
 			   ret, dir[i]);
 			err = 1;
 
-			kfree(xenloop);
+			kfree(xenlcnh);
 			kfree(path);
 			continue;
 		}
@@ -181,7 +181,7 @@ static int probe_domains(void) {
 		if (status)
 			probe_vifs(path);
 
-		kfree(xenloop);
+		kfree(xenlcnh);
 		kfree(path);
 	}
 	TRACE_EXIT;
@@ -238,7 +238,7 @@ static void send_mac(u8 *dest) {
 	m = (message_t *)(skb->data + LINK_HDR);
 
 	memset(m, 0, MSGSIZE);
-	m->type = XENLOOP_MSG_TYPE_SESSION_DISCOVER;
+	m->type = XENLCNH_MSG_TYPE_SESSION_DISCOVER;
 	m->domid = 0;
 	m->mac_count = num_of_macs;
 	memcpy(m->mac, guest_macs, num_of_macs * ETH_ALEN);
@@ -287,15 +287,14 @@ static int __init discover_init(void) {
 	NIC = dev_get_by_name(&init_net, nic);
 
 	if (!NIC) {
-		DB("discovery_init(): Could not find network card %s\n", nic);
+		DB("manager_init(): Could not find network card %s\n", nic);
 		ret = -ENODEV;
 		goto out;
 	}
 
-	DPRINTK(
-	    "Discovery module initialized. Using dom0 source MAC addr = " MAC_FMT
-	    " .\n",
-	    MAC_NTOA(NIC->dev_addr));
+	DPRINTK("Manager module initialized. Using dom0 source MAC addr = " MAC_FMT
+	        " .\n",
+	        MAC_NTOA(NIC->dev_addr));
 
 	discover_thread = kthread_run(update_guests, NULL, "discover");
 
@@ -312,7 +311,7 @@ static void __exit discover_exit(void) {
 	if (NIC)
 		dev_put(NIC);
 
-	DPRINTK("Discovery module terminated\n");
+	DPRINTK("Manager module terminated\n");
 
 	TRACE_EXIT;
 }

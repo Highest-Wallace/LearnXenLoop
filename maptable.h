@@ -43,10 +43,10 @@
 
 #include "xenfifo.h"
 
-#define XENLOOP_ACK_TIMEOUT 5
+#define XENLCNH_ACK_TIMEOUT 5
 #define DISCOVER_TIMEOUT 10 // 增加到10秒，给连接更多时间
 
-#define XENLOOP_HASH_SIZE 64
+#define XENLCNH_HASH_SIZE 64
 
 ulong hash(u8 *);
 int equal(void *, void *);
@@ -58,7 +58,7 @@ typedef struct Bucket {
 typedef struct HashTable {
 	ulong count;
 	ulong buckets;
-	Bucket table[XENLOOP_HASH_SIZE];
+	Bucket table[XENLCNH_HASH_SIZE];
 	struct kmem_cache *entries;
 } HashTable;
 

@@ -1,18 +1,18 @@
 #!/bin/bash
 
-# 简化的测试脚本，用于调试XenLoop连接问题
+# 简化的测试脚本，用于调试XenLCNH连接问题
 
-echo "=== XenLoop Connection Debug Test ==="
+echo "=== XenLCNH Connection Debug Test ==="
 echo "Host: $(hostname)"
 echo "Time: $(date)"
 echo ""
 
 # 检查模块是否已加载
-if lsmod | grep -q xenloop; then
-    echo "✓ XenLoop module is loaded"
+if lsmod | grep -q xenlcnh; then
+    echo "✓ XenLCNH module is loaded"
 else
-    echo "✗ XenLoop module is NOT loaded"
-    echo "Please load with: sudo insmod xenloop.ko nic=eth0"
+    echo "✗ XenLCNH module is NOT loaded"
+    echo "Please load with: sudo insmod xenlcnh.ko nic=eth0"
     exit 1
 fi
 
@@ -21,8 +21,8 @@ echo ""
 echo "=== Current Network Interfaces ==="
 ip addr show | grep -E "^[0-9]+:|inet "
 echo ""
-echo "=== XenLoop Kernel Messages (last 20 lines) ==="
-dmesg | grep -E "(xenloop|xf_|bf_)" | tail -20
+echo "=== XenLCNH Kernel Messages (last 20 lines) ==="
+dmesg | grep -E "(xenlcnh|xf_|bf_)" | tail -20
 
 echo ""
 echo "=== Testing Connectivity ==="
@@ -45,7 +45,7 @@ ping -c 3 -W 2 $TARGET_IP
 
 echo ""
 echo "=== Post-Ping Kernel Messages ==="
-dmesg | grep -E "(xenloop|xf_|bf_|ERROR|DEBUG)" | tail -10
+dmesg | grep -E "(xenlcnh|xf_|bf_|ERROR|DEBUG)" | tail -10
 
 echo ""
 echo "=== Test Complete ==="

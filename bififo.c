@@ -145,7 +145,7 @@ static inline void copy_large_pkt(bf_data_t *mdata, struct sk_buff *skb,
 
 	// 设置 skb 的网络层相关信息
 	skb->mac_header = (__u16)(skb->data - skb->head) + ETH_HLEN;
-	skb->ip_summed = CHECKSUM_UNNECESSARY; // XenLoop 内部通信，无需校验和
+	skb->ip_summed = CHECKSUM_UNNECESSARY; // 内部通信，无需校验和
 	skb->pkt_type = PACKET_HOST;
 	skb->protocol = htons(ETH_P_IP);
 	skb->dev = NIC;
@@ -228,7 +228,7 @@ void recv_packets(bf_handle_t *bfh) {
 
 		spin_unlock_irqrestore(&recv_lock, flags);
 
-		// DPRINTK("packet received through xenloop\n");
+		// DPRINTK("packet received through xenlcnh\n");
 		// 将接收到的包交给网络协议栈处理
 		netif_rx(skb);
 
@@ -443,7 +443,7 @@ irqreturn_t bf_callback(int rq, void *dev_id) {
 		BUG_ON(!e);
 
 		// 设置状态为挂起并唤醒等待队列
-		e->status = XENLOOP_STATUS_SUSPEND;
+		e->status = XENLCNH_STATUS_SUSPEND;
 
 		// wake_up_interruptible(&swq);
 		// 使用 tasklet 在安全上下文中唤醒线程

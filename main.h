@@ -45,13 +45,13 @@ typedef struct ethhdr ethhdr;
 typedef struct net_device net_device;
 typedef struct packet_type packet_type;
 
-#define XENLOOP_MSG_TYPE_SESSION_DISCOVER 77
-#define XENLOOP_MSG_TYPE_SESSION_DISCOVER_ACK 78
-#define XENLOOP_MSG_TYPE_CREATE_CHN 2
-#define XENLOOP_MSG_TYPE_CREATE_ACK 4
-#define XENLOOP_MSG_TYPE_DESTROY_CHN 8
+#define XENLCNH_MSG_TYPE_SESSION_DISCOVER 77
+#define XENLCNH_MSG_TYPE_SESSION_DISCOVER_ACK 78
+#define XENLCNH_MSG_TYPE_CREATE_CHN 2
+#define XENLCNH_MSG_TYPE_CREATE_ACK 4
+#define XENLCNH_MSG_TYPE_DESTROY_CHN 8
 
-#define XENLOOP_ENTRY_ORDER 15
+#define XENLCNH_ENTRY_ORDER 15
 
 typedef struct message {
 	u8 type;

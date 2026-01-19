@@ -151,11 +151,11 @@ extern void migrate_save(void *);
 // 虚拟机迁移时发送状态
 extern void migrate_send(void);
 
-// XenLoop 连接状态定义
-#define XENLOOP_STATUS_INIT 1      // 初始状态
-#define XENLOOP_STATUS_LISTEN 2    // 监听状态
-#define XENLOOP_STATUS_CONNECTED 4 // 已连接状态
-#define XENLOOP_STATUS_SUSPEND 8   // 挂起状态
+// XenLCNH 连接状态定义
+#define XENLCNH_STATUS_INIT 1      // 初始状态
+#define XENLCNH_STATUS_LISTEN 2    // 监听状态
+#define XENLCNH_STATUS_CONNECTED 4 // 已连接状态
+#define XENLCNH_STATUS_SUSPEND 8   // 挂起状态
 
 /*
  * @brief 连接条目结构体
@@ -166,7 +166,7 @@ typedef struct Entry {
 	struct list_head ip_mapping; // 用于 IP 映射链表
 	u8 mac[ETH_ALEN];            // 远程域的 MAC 地址
 	u32 ip;                      // 远程域的 IP 地址
-	u8 status;                   // 连接状态 (XENLOOP_STATUS_*)
+	u8 status;                   // 连接状态 (XENLCNH_STATUS_*)
 	u8 listen_flag;              // 是否为监听端
 	u8 resource_owner;           // 是否拥有资源 (1: 拥有, 0: 不拥有)
 	u8 retry_count;              // 重试计数
