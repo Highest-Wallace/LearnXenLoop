@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # --- 配置区域 ---
-MODE="DEBUG"        # "DEBUG" 或 "BENCHMARK"
-IP_DOMU="10.75.85.53" 
+MODE="BENCHMARK"        # "DEBUG" 或 "BENCHMARK"
+IP_DOMU="10.177.21.218" 
 PORT="6379"
 # PASSWORD="your_password" 
 

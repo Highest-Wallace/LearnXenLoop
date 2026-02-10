@@ -186,9 +186,9 @@ inline void remove_entry_ip(HashTable *ht, u32 ip) {
 				continue;
 			}
 
-			// 使用probe_kernel_read检查内存是否可访问
+			// 使用copy_from_kernel_nofault检查内存是否可访问
 			u32 entry_ip;
-			if (probe_kernel_read(&entry_ip, &e->ip, sizeof(u32)) != 0) {
+			if (copy_from_kernel_nofault(&entry_ip, &e->ip, sizeof(u32)) != 0) {
 				EPRINTK("Cannot read entry IP field\n");
 				continue;
 			}

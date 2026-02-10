@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # --- 配置区域 ---
-MODE="DEBUG"        # 修改这里切换模式: "DEBUG" 或 "BENCHMARK"
-IP_DOMU="10.75.85.53" 
+MODE="BENCHMARK"        # 修改这里切换模式: "DEBUG" 或 "BENCHMARK"
+IP_DOMU="10.177.21.218" 
 
 if [ "$MODE" == "DEBUG" ]; then
     TIME="5"
