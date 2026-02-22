@@ -34,6 +34,7 @@
 #ifndef _XENFIFO_H_
 #define _XENFIFO_H_
 
+#include <asm/barrier.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/module.h>
@@ -176,13 +177,12 @@ static inline uint32_t xf_pushn(xf_handle_t *handle, uint32_t n) {
 	}
 
 	/*
-	 * 写内存屏障：确保在更新 back 指针之前，所有的数据写入操作
-	 * 都已经完成并对其他域可见。这是无锁实现的关键。
+	 * 使用 Store-Release 语义替代裸 wmb()：
+	 * 1. 保证前面的 payload 数据写入严格先于 back 指针更新
+	 * 2. 保证 back 指针的更新是一个不可拆分的原子赋值（防止 Store Tearing）
+	 * 3. 阻止编译器对该赋值操作进行重排优化
 	 */
-	wmb();
-
-	// 增加尾指针
-	des->back += n;
+	smp_store_release(&des->back, des->back + n);
 
 	return 0;
 }
